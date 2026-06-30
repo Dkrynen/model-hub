@@ -55,7 +55,7 @@ Filename: "taskkill"; Parameters: "/f /im {#MyAppExeName}"; Flags: runhidden
 
 [Code]
 var
-  ProcessResult: Cardinal;
+  OpenResult: Integer;
 
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
@@ -63,9 +63,9 @@ begin
   begin
     if not RegKeyExists(HKLM, 'SYSTEM\CurrentControlSet\Services\Ollama') then
     begin
-      if MsgBox('Ollama was not detected on your system. Would you like to download it?', mbConfirmation, MB_YESNO) = IDYES then
+      if MsgBox('Ollama was not detected. Download it?', mbConfirmation, MB_YESNO) = IDYES then
       begin
-        ShellExec('open', 'https://ollama.com/download', '', '', SW_SHOW, ewNoWait, ProcessResult);
+        Exec('rundll32.exe', 'url.dll,FileProtocolHandler https://ollama.com/download', '', SW_SHOW, ewNoWait, OpenResult);
       end;
     end;
   end;
