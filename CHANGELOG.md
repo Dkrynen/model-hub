@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.2.0 (2026-06-30)
+
+- Full Ollama library browser (235+ models with descriptions, capabilities, pull counts)
+- Search, filter by capability (vision, tools, thinking, embedding), and sort models
+- Paginated model grid with one-click install
+- Model tag explorer — click "Tags" on any model to see all available variants/quantizations
+- Manual install input on Browse and Downloads pages (type any model:tag)
+- Running models panel on Installed page with auto-polling
+- New sidebar tab layout: Dashboard → Browse Models → Scan & Recommend → Installed → Downloads → Chat
+- Backend: cached Ollama library scraper with 1-hour TTL, `/api/library/browse`, `/api/library/tags`, `/api/ollama/ps` endpoints
+
 ## 1.1.0 (2026-06-30)
 
 - Markdown rendering in chat (code blocks, bold, italic, lists)

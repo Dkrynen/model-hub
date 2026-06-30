@@ -10,6 +10,11 @@ function escHtml(s) {
   return d.innerHTML;
 }
 
+function debounce(fn, ms) {
+  let timer;
+  return (...args) => { clearTimeout(timer); timer = setTimeout(() => fn(...args), ms); };
+}
+
 function mdToHtml(text) {
   return escHtml(text)
     .replace(/```(\w*)\n([\s\S]*?)```/g, "<pre><code>$2</code></pre>")
@@ -56,6 +61,7 @@ document.addEventListener("DOMContentLoaded", () => {
   checkFirstRun();
   checkForUpdates();
   ollamaPoll = setInterval(checkOllama, 10000);
+  setInterval(loadRunningModels, 15000);
 
   document.getElementById("chat-input").addEventListener("keydown", e => {
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); sendChat(); }
@@ -63,6 +69,9 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("chat-model").addEventListener("change", selectChatModel);
   document.getElementById("sort-recs").addEventListener("change", sortRecommendations);
   document.getElementById("model-search").addEventListener("input", filterInstalledModels);
+  document.getElementById("browse-search").addEventListener("input", debounce(loadBrowse, 300));
+  document.getElementById("browse-capability").addEventListener("change", loadBrowse);
+  document.getElementById("browse-sort").addEventListener("change", loadBrowse);
 
   document.addEventListener("keydown", e => {
     if (e.key === "Escape") closeModal();
@@ -79,15 +88,24 @@ document.addEventListener("DOMContentLoaded", () => {
     if (delBtn) { deleteModel(decodeURIComponent(delBtn.dataset.delete)); return; }
     const copyBtn = e.target.closest("[data-copy]");
     if (copyBtn) { copyText(copyBtn.dataset.copy); return; }
+    const pageBtn = e.target.closest("[data-page-btn]");
+    if (pageBtn) { browsePage(parseInt(pageBtn.dataset.pageBtn)); return; }
+    const browseDetailBtn = e.target.closest("[data-browse-details]");
+    if (browseDetailBtn) { showBrowseDetails(decodeURIComponent(browseDetailBtn.dataset.browseDetails)); return; }
 
     if (e.target.id === "modal-overlay" || e.target.closest("#modal-close")) closeModal();
     if (e.target.id === "btn-scan") runScan();
     if (e.target.id === "btn-recommend") runScanAndRecommend();
-    if (e.target.id === "btn-refresh-models") loadInstalledModels();
+    if (e.target.id === "btn-refresh-models") { loadInstalledModels(); loadRunningModels(); }
     if (e.target.id === "btn-refresh-chat-models") loadChatModels();
     if (e.target.id === "btn-clear-chat") clearChat();
     if (e.target.id === "btn-export-csv") exportRecsCSV();
     if (e.target.id === "sidebar-toggle") toggleSidebar();
+    if (e.target.id === "btn-manual-install" || e.target.id === "btn-manual-install-dl") {
+      const input = document.getElementById(e.target.id === "btn-manual-install" ? "manual-model-input" : "manual-model-input-dl");
+      const name = input.value.trim();
+      if (name) { pullModel(name); input.value = ""; }
+    }
   });
 });
 
@@ -105,9 +123,10 @@ function initNav() {
       document.querySelectorAll(".page").forEach(p => p.classList.remove("active"));
       document.getElementById(`page-${page}`).classList.add("active");
       document.getElementById("sidebar").classList.remove("open");
-      if (page === "models") loadInstalledModels();
+      if (page === "models") { loadInstalledModels(); loadRunningModels(); }
       if (page === "dashboard") loadDashboard();
       if (page === "chat") loadChatModels();
+      if (page === "browse") loadBrowse();
     });
   });
 }
@@ -193,6 +212,8 @@ async function loadDashboard() {
     if (models.length === 0) { card.textContent = "No models installed"; }
     else { card.innerHTML = models.map(m => `<div>${escHtml(m.name)} <span class="badge badge-gpu">${m.size_gb} GB</span></div>`).join(""); }
   } catch { document.getElementById("card-models").querySelector(".card-body").textContent = "Ollama not running"; }
+
+  loadRunningModels();
 }
 
 function renderSystemCard(info) {
@@ -608,4 +629,124 @@ function appendChatMessage(role, text, thinking) {
   box.appendChild(div);
   box.scrollTop = box.scrollHeight;
   return div;
+}
+
+let allBrowseModels = [];
+let browsePageIdx = 0;
+const BROWSE_PAGE_SIZE = 24;
+
+async function loadBrowse() {
+  const grid = document.getElementById("browse-grid");
+  grid.innerHTML = '<div class="spinner"></div>';
+  const q = document.getElementById("browse-search").value;
+  const capability = document.getElementById("browse-capability").value;
+  const sort = document.getElementById("browse-sort").value;
+  try {
+    const params = new URLSearchParams();
+    if (q) params.set("q", q);
+    if (capability) params.set("capability", capability);
+    params.set("sort", sort);
+    const r = await api("GET", "/api/library/browse?" + params.toString());
+    allBrowseModels = r.models || [];
+    browsePageIdx = 0;
+    document.getElementById("browse-count").textContent = `${allBrowseModels.length} models`;
+    renderBrowsePage();
+  } catch {
+    grid.innerHTML = '<div class="result-box"><span class="empty-state">Failed to load model catalog.</span></div>';
+  }
+}
+
+function renderBrowsePage() {
+  const grid = document.getElementById("browse-grid");
+  const start = browsePageIdx * BROWSE_PAGE_SIZE;
+  const page = allBrowseModels.slice(start, start + BROWSE_PAGE_SIZE);
+  if (!page.length) {
+    grid.innerHTML = '<div class="result-box"><span class="empty-state">No models found.</span></div>';
+    renderBrowsePagination();
+    return;
+  }
+  grid.innerHTML = page.map(m => {
+    const tag = encodeURIComponent(m.name);
+    const caps = (m.capabilities || []).map(c => `<span class="badge-sm cap">${escHtml(c)}</span>`).join("");
+    const sizes = (m.sizes || []).map(s => `<span class="badge-sm size">${escHtml(s)}</span>`).join("");
+    return `<div class="browse-card">
+      <h3>${escHtml(m.name)}</h3>
+      <div class="desc">${escHtml(m.description || "No description available.")}</div>
+      <div class="meta">
+        <span>${escHtml(m.pulls)} pulls</span>
+        ${caps ? ` ${caps}` : ""}
+        ${sizes ? ` ${sizes}` : ""}
+      </div>
+      <div class="actions">
+        <button class="btn btn-sm" data-pull="${tag}">Install</button>
+        <button class="btn btn-sm btn-secondary" data-browse-details="${tag}">Tags</button>
+      </div>
+    </div>`;
+  }).join("");
+  renderBrowsePagination();
+}
+
+function renderBrowsePagination() {
+  const total = allBrowseModels.length;
+  const pages = Math.ceil(total / BROWSE_PAGE_SIZE);
+  const container = document.getElementById("browse-pagination");
+  if (pages <= 1) { container.innerHTML = ""; return; }
+  let html = `<button class="page-btn" data-page-btn="${browsePageIdx - 1}" ${browsePageIdx === 0 ? "disabled" : ""}>&laquo; Prev</button>`;
+  for (let i = Math.max(0, browsePageIdx - 3); i < Math.min(pages, browsePageIdx + 4); i++) {
+    html += `<button class="page-btn${i === browsePageIdx ? " active" : ""}" data-page-btn="${i}">${i + 1}</button>`;
+  }
+  html += `<button class="page-btn" data-page-btn="${browsePageIdx + 1}" ${browsePageIdx >= pages - 1 ? "disabled" : ""}>Next &raquo;</button>`;
+  container.innerHTML = html;
+}
+
+function browsePage(idx) {
+  if (idx < 0 || idx >= Math.ceil(allBrowseModels.length / BROWSE_PAGE_SIZE)) return;
+  browsePageIdx = idx;
+  renderBrowsePage();
+  document.getElementById("browse-grid").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+async function showBrowseDetails(name) {
+  try {
+    const r = await api("GET", `/api/library/tags?name=${encodeURIComponent(name)}`);
+    if (r.error) { toast(`Error: ${r.error}`, "error"); return; }
+    const tags = r.tags || [];
+    if (!tags.length) {
+      toast(`No tags found for ${name}`, "info");
+      return;
+    }
+    const tagHtml = tags.map(t => {
+      const fullTag = `${name}:${t}`;
+      return `<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid var(--border)">
+        <code style="font-size:0.85rem">${escHtml(fullTag)}</code>
+        <button class="btn btn-sm" data-pull="${encodeURIComponent(fullTag)}">Install</button>
+      </div>`;
+    }).join("");
+    openModal(`Tags: ${escHtml(name)}`, `
+      <p style="margin-bottom:12px;color:var(--muted);font-size:0.85rem">${tags.length} available variants</p>
+      ${tagHtml}
+    `);
+  } catch {
+    toast("Failed to load tags.", "error");
+  }
+}
+
+async function loadRunningModels() {
+  const div = document.getElementById("running-models");
+  const badge = document.getElementById("running-models-badge");
+  try {
+    const r = await api("GET", "/api/ollama/ps");
+    if (!r.running || !r.models.length) {
+      div.innerHTML = '<em>No models currently loaded.</em>';
+      badge.textContent = "";
+      return;
+    }
+    badge.textContent = `${r.models.length} running`;
+    div.innerHTML = r.models.map(m =>
+      `<div style="margin-bottom:4px">${escHtml(m.name)} <span class="badge badge-gpu">${m.size_gb} GB</span></div>`
+    ).join("");
+  } catch {
+    div.innerHTML = '<em>Could not check.</em>';
+    badge.textContent = "";
+  }
 }

@@ -1,4 +1,4 @@
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 __app_name__ = "Model Hub"
 __author__ = "Model Hub Contributors"
 __description__ = "Hardware scanner + model recommender + installer for local LLMs"

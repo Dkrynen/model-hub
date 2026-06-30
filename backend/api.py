@@ -1,6 +1,7 @@
 import json
 import os
 import platform
+import re
 import subprocess
 import sys
 import threading
@@ -318,30 +319,132 @@ def ollama_check_detailed():
     })
 
 
-@app.route("/api/ollama/library")
-def ollama_library():
-    """Fetch available models from Ollama's library for better discovery."""
+LIBRARY_CACHE = None
+LIBRARY_CACHE_TIME = 0
+LIBRARY_CACHE_TTL = 3600
+
+def _fetch_library():
+    global LIBRARY_CACHE, LIBRARY_CACHE_TIME
+    now = time.time()
+    if LIBRARY_CACHE and (now - LIBRARY_CACHE_TIME) < LIBRARY_CACHE_TTL:
+        return LIBRARY_CACHE
+    cache_path = Path(__file__).parent / "cookbook" / "data" / "library_cache.json"
+    if cache_path.exists():
+        with open(cache_path) as f:
+            data = json.load(f)
+            if (now - data.get("fetched", 0)) < 86400:
+                LIBRARY_CACHE = data["models"]
+                LIBRARY_CACHE_TIME = now
+                return LIBRARY_CACHE
     try:
         import urllib.request
-        import urllib.error
-        url = "https://ollama.com/api/tags"
-        req = urllib.request.Request(url, method="GET")
-        req.add_header("Accept", "application/json")
-        req.add_header("User-Agent", "model-hub/1.0")
-        resp = urllib.request.urlopen(req, timeout=10)
-        data = json.loads(resp.read().decode())
-        models = data.get("models", [])
-        return jsonify([
-            {
-                "name": m.get("name", ""),
-                "description": (m.get("description") or "")[:200],
-                "pulls": m.get("pulls", 0),
-                "tags": m.get("tags", []),
-            }
-            for m in models
-        ])
+        req = urllib.request.Request("https://ollama.com/library", headers={"User-Agent": "Mozilla/5.0"})
+        resp = urllib.request.urlopen(req, timeout=15)
+        html = resp.read().decode()
+        models = []
+        cards = re.split(r'(?=<a\s+href="/library/[^"]+"\s+class="group\s+w-full\s+space-y-5")', html)[1:]
+        for card in cards:
+            name_m = re.search(r'href="/library/([^"]+)"', card)
+            if not name_m:
+                continue
+            name = name_m.group(1)
+            desc_m = re.search(r'class="max-w-lg\s+break-words\s+text-neutral-800\s+text-md">(.*?)</p>', card, re.DOTALL)
+            desc = re.sub(r'<[^>]+>', '', desc_m.group(1)).strip() if desc_m else ""
+            capabilities = re.findall(r'x-test-capability[^>]*>\s*([^<]+)\s*<', card)
+            sizes = re.findall(r'x-test-size[^>]*>\s*([^<]+)\s*<', card)
+            pulls_m = re.search(r'x-test-pull-count>([^<]+)<', card)
+            pulls = pulls_m.group(1).strip() if pulls_m else "0"
+            tags_m = re.search(r'x-test-tag-count>([^<]+)<', card)
+            tag_count = tags_m.group(1).strip() if tags_m else "0"
+            models.append({
+                "name": name,
+                "description": desc[:300],
+                "capabilities": capabilities,
+                "sizes": sizes,
+                "pulls": pulls,
+                "tag_count": tag_count,
+            })
+        LIBRARY_CACHE = models
+        LIBRARY_CACHE_TIME = now
+        try:
+            with open(cache_path, "w") as f:
+                json.dump({"fetched": now, "models": models}, f)
+        except Exception:
+            pass
+        return models
     except Exception as e:
-        return jsonify({"error": str(e), "models": []})
+        if LIBRARY_CACHE:
+            return LIBRARY_CACHE
+        return {"error": str(e), "models": []}
+
+
+@app.route("/api/library/browse")
+def api_library_browse():
+    q = request.args.get("q", "").strip().lower()
+    capability = request.args.get("capability", "").strip().lower()
+    sort = request.args.get("sort", "pulls")
+    result = _fetch_library()
+    if isinstance(result, dict) and "error" in result:
+        return jsonify(result)
+    models = list(result)
+    if q:
+        models = [m for m in models if q in m["name"].lower() or q in m["description"].lower()]
+    if capability:
+        models = [m for m in models if any(capability in c.lower() for c in m.get("capabilities", []))]
+    def parse_pulls(p):
+        try:
+            p = p.replace("M", "e6").replace("B", "e9").replace("K", "e3")
+            return float(p)
+        except (ValueError, TypeError):
+            return 0
+    if sort == "name":
+        models.sort(key=lambda m: m["name"])
+    elif sort == "pulls":
+        models.sort(key=lambda m: parse_pulls(m.get("pulls", "0")), reverse=True)
+    elif sort == "newest":
+        models.sort(key=lambda m: m["name"], reverse=True)
+    return jsonify({"total": len(models), "models": models})
+
+
+@app.route("/api/library/tags")
+def api_library_tags():
+    name = request.args.get("name", "").strip()
+    if not name:
+        return jsonify({"error": "No model name"}), 400
+    try:
+        import urllib.request
+        url = f"https://ollama.com/library/{name}/tags"
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        resp = urllib.request.urlopen(req, timeout=10)
+        html = resp.read().decode()
+        tags = re.findall(r'href="/library/' + re.escape(name) + r':([^"]+)"', html)
+        tags = sorted(set(tags))
+        return jsonify({"name": name, "tags": tags, "count": len(tags)})
+    except Exception as e:
+        return jsonify({"error": str(e), "name": name, "tags": []})
+
+
+@app.route("/api/ollama/library")
+def ollama_library():
+    result = _fetch_library()
+    if isinstance(result, dict) and "error" in result:
+        return jsonify(result)
+    return jsonify(result)
+
+
+@app.route("/api/ollama/ps")
+def ollama_ps():
+    resp = _ollama_request("GET", "/api/ps")
+    if resp is None:
+        return jsonify({"running": False, "models": []})
+    models = []
+    for m in resp.get("models", []):
+        models.append({
+            "name": m.get("name"),
+            "size_gb": round(m.get("size", 0) / (1024**3), 2),
+            "digest_short": (m.get("digest") or "")[:12],
+        })
+    return jsonify({"running": True, "models": models})
 
 
 def run_server(host="127.0.0.1", port=5050, debug=False):
