@@ -498,10 +498,98 @@ def ollama_ps():
     return jsonify({"running": True, "models": models})
 
 
+@app.route("/api/config/downloads")
+def api_config_downloads():
+    log_file = Path.home() / ".model-hub" / "downloads" / "history.jsonl"
+    if not log_file.exists():
+        return jsonify([])
+    entries = []
+    try:
+        with open(log_file) as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        entries.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        pass
+    except Exception:
+        pass
+    return jsonify(entries)
+
+
+@app.route("/api/config", methods=["GET"])
+def api_get_config():
+    from .cookbook.config import load_config
+    cfg = load_config()
+    return jsonify({
+        "workspace": cfg.workspace,
+        "ollama_host": cfg.ollama_host,
+        "theme": cfg.theme,
+        "default_model": cfg.default_model,
+    })
+
+
+@app.route("/api/config", methods=["PUT"])
+def api_save_config():
+    from .cookbook.config import load_config, save_config
+    data = request.get_json() or {}
+    cfg = load_config()
+    for k in ("workspace", "ollama_host", "theme", "default_model"):
+        if k in data:
+            setattr(cfg, k, data[k])
+    save_config(cfg)
+    return jsonify({"success": True})
+
+
+@app.route("/api/workspaces", methods=["GET"])
+def api_list_workspaces():
+    from .cookbook.config import list_workspaces
+    ws = list_workspaces()
+    return jsonify([{"id": w.id, "name": w.name, "description": w.description} for w in ws])
+
+
+@app.route("/api/workspaces", methods=["POST"])
+def api_create_workspace():
+    from .cookbook.config import create_workspace
+    data = request.get_json() or {}
+    name = data.get("name", "").strip()
+    if not name:
+        return jsonify({"error": "Workspace name required"}), 400
+    ws = create_workspace(name, data.get("description", ""))
+    return jsonify({"id": ws.id, "name": ws.name, "description": ws.description}), 201
+
+
+@app.route("/api/workspaces/<workspace_id>", methods=["GET"])
+def api_get_workspace(workspace_id):
+    from .cookbook.config import get_workspace
+    ws = get_workspace(workspace_id)
+    if not ws:
+        return jsonify({"error": "Workspace not found"}), 404
+    return jsonify({"id": ws.id, "name": ws.name, "description": ws.description})
+
+
+@app.route("/api/workspaces/<workspace_id>", methods=["DELETE"])
+def api_delete_workspace(workspace_id):
+    from .cookbook.config import delete_workspace
+    if delete_workspace(workspace_id):
+        return jsonify({"success": True})
+    return jsonify({"error": "Cannot delete default workspace or workspace not found"}), 400
+
+
+@app.route("/api/workspaces/<workspace_id>/switch", methods=["POST"])
+def api_switch_workspace(workspace_id):
+    from .cookbook.config import switch_workspace, list_sessions
+    if not switch_workspace(workspace_id):
+        return jsonify({"error": "Workspace not found"}), 404
+    return jsonify({"success": True, "workspace": workspace_id})
+
+
 @app.route("/api/sessions", methods=["GET"])
 def api_list_sessions():
     from .cookbook.persistence import list_sessions
-    return jsonify(list_sessions())
+    ws = request.args.get("workspace", "")
+    return jsonify(list_sessions(workspace=ws))
 
 
 @app.route("/api/sessions", methods=["POST"])
@@ -512,6 +600,7 @@ def api_create_session():
         name=data.get("name", ""),
         model=data.get("model", ""),
         system_prompt=data.get("system_prompt", ""),
+        workspace=data.get("workspace", ""),
     )
     return jsonify({"id": sid}), 201
 
@@ -534,6 +623,7 @@ def api_save_session(session_id):
         model=data.get("model", ""),
         messages=data.get("messages", []),
         name=data.get("name", ""),
+        workspace=data.get("workspace", ""),
     )
     return jsonify({"success": True})
 

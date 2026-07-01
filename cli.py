@@ -1,18 +1,21 @@
 #!/usr/bin/env python3
+
 """
 Model Hub CLI — chat with and manage local LLMs via Ollama.
 
-Usage:
-  model-hub chat [model]          Start interactive chat
-  model-hub list                   List installed models
-  model-hub pull <model>           Download a model
-  model-hub delete <model>         Delete a model
-  model-hub ps                     Show running models
-  model-hub inspect <model>        Show model details
-  model-hub scan                   Scan hardware
-  model-hub recommend              Get recommendations
-  model-hub browse [query]         Browse model library
-  model-hub help                   Show this help
+Subcommands:
+  chat [model]          Interactive chat with a model
+  list                  List installed models
+  pull <model>          Download a model
+  delete <model>        Delete a model
+  ps                    Show running models
+  inspect <model>       Show model details
+  scan                  Scan hardware
+  recommend             Get model recommendations
+  browse [query]        Browse model library
+  workspace             Manage workspaces
+  config                View/set configuration
+  help                  Show this help
 """
 
 import argparse
@@ -51,6 +54,7 @@ def eprint(*args, **kwargs):
 
 def get_host():
     return os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+
 
 def ollama(method, path, body=None, timeout=30):
     url = f"{get_host()}{path}"
@@ -112,6 +116,42 @@ def print_table(headers, rows):
     print(sep)
 
 
+def _log_download(model_name: str, status: str = "completed", size_gb: float = 0):
+    try:
+        log_dir = Path.home() / ".model-hub" / "downloads"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_file = log_dir / "history.jsonl"
+        entry = {
+            "model": model_name,
+            "status": status,
+            "size_gb": size_gb,
+            "timestamp": time.time(),
+        }
+        with open(log_file, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+    except Exception:
+        pass
+
+
+def _download_history() -> list[dict]:
+    log_file = Path.home() / ".model-hub" / "downloads" / "history.jsonl"
+    if not log_file.exists():
+        return []
+    history = []
+    try:
+        with open(log_file) as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        history.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        pass
+    except Exception:
+        pass
+    return history
+
+
 def _update_session(session_id, model, messages):
     try:
         from backend.cookbook.persistence import save_session
@@ -131,7 +171,9 @@ def _auto_save(session_id, model, messages):
 
 def cmd_chat(args):
     from backend.cookbook.persistence import create_session, get_session, list_sessions, save_session
+    from backend.cookbook.config import ensure_workspace
 
+    ensure_workspace()
     models = ollama("GET", "/api/tags")
     if "error" in models:
         eprint(f"{C['red']}Error: {models['error']}{C['reset']}")
@@ -407,9 +449,11 @@ def cmd_pull(args):
     print(f"{C['yellow']}Pulling {C['bold']}{model}{C['reset']}...")
     print(f"{C['gray']}(this may take a while depending on model size){C['reset']}\n")
 
+    success = False
     for chunk in ollama_stream("/api/pull", {"name": model}, timeout=3600):
         if "error" in chunk:
             eprint(f"\n{C['red']}Error: {chunk['error']}{C['reset']}")
+            _log_download(model, "failed")
             sys.exit(1)
         status = chunk.get("status", "")
         if status:
@@ -422,7 +466,16 @@ def cmd_pull(args):
             else:
                 print(f"\r  {C['dim']}{status}{C['reset']}", end="", flush=True)
         if chunk.get("status") == "success":
+            success = True
+            size_gb = 0
+            if chunk.get("total"):
+                size_gb = round(chunk["total"] / (1024**3), 2)
             print(f"\n\n{C['green']}✓ {model} installed successfully!{C['reset']}")
+            _log_download(model, "completed", size_gb)
+
+    if not success:
+        print(f"\n{C['yellow']}Pull may still be in progress. Check 'model-hub list'.{C['reset']}")
+        _log_download(model, "incomplete")
 
 
 def cmd_delete(args):
@@ -528,7 +581,7 @@ def cmd_scan(args):
 
     except ImportError as e:
         eprint(f"{C['red']}Error loading hardware scanner: {e}{C['reset']}")
-        eprint(f"{C['gray']}Run this from the Model Hub project directory.{C['reset']}")
+        eprint(f"{C['gray']}Run from the Model Hub project directory.{C['reset']}")
         sys.exit(1)
 
 
@@ -588,7 +641,7 @@ def cmd_browse(args):
             pass
 
     if not models:
-        eprint(f"{C['yellow']}No model catalog available. Start the web server once to populate the cache, or install some models first.{C['reset']}")
+        eprint(f"{C['yellow']}No model catalog available.{C['reset']}")
         sys.exit(1)
 
     if query:
@@ -629,6 +682,105 @@ def cmd_browse(args):
     remaining = len(models) - (args.limit or 30)
     if remaining > 0:
         print(f"\n  {C['dim']}... and {remaining} more. Use --limit to show more.{C['reset']}")
+
+
+def cmd_workspace(args):
+    from backend.cookbook.config import (
+        list_workspaces, create_workspace, delete_workspace,
+        switch_workspace, get_workspace, load_config,
+    )
+
+    if args.action == "list":
+        ws = list_workspaces()
+        config = load_config()
+        if not ws:
+            print(f"{C['yellow']}No workspaces.{C['reset']}")
+            return
+        print_header(f"Workspaces ({len(ws)})")
+        for w in ws:
+            marker = f"{C['green']}*{C['reset']}" if w.id == config.workspace else " "
+            print(f"  {marker} {C['bold']}{w.name:<30}{C['reset']} {C['gray']}{w.description}{C['reset']}")
+
+    elif args.action == "create":
+        name = args.name
+        desc = args.description or ""
+        if not name:
+            eprint(f"{C['red']}Workspace name required.{C['reset']}")
+            sys.exit(1)
+        ws = create_workspace(name, desc)
+        print(f"{C['green']}✓ Created workspace '{ws.name}' (id: {ws.id}){C['reset']}")
+
+    elif args.action == "delete":
+        name = args.name
+        ws = get_workspace(name)
+        if not ws:
+            eprint(f"{C['red']}Workspace '{name}' not found.{C['reset']}")
+            sys.exit(1)
+        if not args.yes:
+            print(f"{C['yellow']}Delete workspace '{ws.name}'? This removes all sessions. [y/N] ", end="", flush=True)
+            resp = input().strip().lower()
+            if resp != "y":
+                print(f"{C['gray']}Cancelled.{C['reset']}")
+                return
+        if delete_workspace(name):
+            print(f"{C['green']}✓ Deleted workspace '{name}'.{C['reset']}")
+        else:
+            print(f"{C['red']}Cannot delete the default workspace.{C['reset']}")
+
+    elif args.action == "switch":
+        name = args.name
+        if switch_workspace(name):
+            print(f"{C['green']}✓ Switched to workspace '{name}'.{C['reset']}")
+        else:
+            eprint(f"{C['red']}Workspace '{name}' not found.{C['reset']}")
+            sys.exit(1)
+
+    elif args.action == "show":
+        from backend.cookbook.config import load_config
+        config = load_config()
+        ws = get_workspace(config.workspace)
+        ws_name = ws.name if ws else config.workspace
+        print_header(f"Current Workspace")
+        print(f"  {C['bold']}ID:{C['reset']}   {config.workspace}")
+        print(f"  {C['bold']}Name:{C['reset']} {ws_name}")
+
+
+def cmd_config(args):
+    from backend.cookbook.config import load_config, save_config
+
+    if args.action == "show":
+        cfg = load_config()
+        print_header("Configuration")
+        print(f"  {C['bold']}workspace:{C['reset']}    {cfg.workspace}")
+        print(f"  {C['bold']}ollama_host:{C['reset']}  {cfg.ollama_host}")
+        print(f"  {C['bold']}theme:{C['reset']}        {cfg.theme}")
+        print(f"  {C['bold']}default_model:{C['reset']} {cfg.default_model}")
+        print()
+
+    elif args.action == "set":
+        key = args.key
+        value = args.value
+        cfg = load_config()
+        valid_keys = {"workspace", "ollama_host", "theme", "default_model"}
+        if key not in valid_keys:
+            eprint(f"{C['red']}Invalid key: {key}. Valid: {', '.join(sorted(valid_keys))}{C['reset']}")
+            sys.exit(1)
+        setattr(cfg, key, value)
+        save_config(cfg)
+        print(f"{C['green']}✓ Set {key} = {value}{C['reset']}")
+
+    elif args.action == "downloads":
+        history = _download_history()
+        if not history:
+            print(f"{C['yellow']}No download history.{C['reset']}")
+            return
+        print_header(f"Download History ({len(history)} entries)")
+        for entry in reversed(history[-30:]):
+            ts = time.strftime("%Y-%m-%d %H:%M", time.localtime(entry.get("timestamp", 0)))
+            status = entry.get("status", "?")
+            size = f" ({entry['size_gb']} GB)" if entry.get("size_gb") else ""
+            print(f"  {C['dim']}{ts}{C['reset']}  {C['bold']}{entry['model']:<30}{C['reset']}  {status}{size}")
+        print()
 
 
 def print_banner():
@@ -677,6 +829,27 @@ def main():
     p_browse.add_argument("--sort", default="pulls", choices=["pulls", "vram", "params", "name"], help="Sort order")
     p_browse.add_argument("--limit", type=int, default=30, help="Max results")
 
+    p_ws = sub.add_parser("workspace", aliases=["ws"], help="Manage workspaces")
+    ws_sub = p_ws.add_subparsers(dest="action", required=True)
+    ws_list = ws_sub.add_parser("list", help="List workspaces")
+    ws_show = ws_sub.add_parser("show", help="Show current workspace")
+    ws_create = ws_sub.add_parser("create", help="Create a workspace")
+    ws_create.add_argument("name", help="Workspace name")
+    ws_create.add_argument("--description", "-d", help="Workspace description")
+    ws_delete = ws_sub.add_parser("delete", help="Delete a workspace")
+    ws_delete.add_argument("name", help="Workspace name or id")
+    ws_delete.add_argument("-y", "--yes", action="store_true", help="Skip confirmation")
+    ws_switch = ws_sub.add_parser("switch", help="Switch workspace")
+    ws_switch.add_argument("name", help="Workspace name or id")
+
+    p_cfg = sub.add_parser("config", help="View or set configuration")
+    cfg_sub = p_cfg.add_subparsers(dest="action", required=True)
+    cfg_show = cfg_sub.add_parser("show", help="Show configuration")
+    cfg_set = cfg_sub.add_parser("set", help="Set a config value")
+    cfg_set.add_argument("key", help="Config key (workspace, ollama_host, theme, default_model)")
+    cfg_set.add_argument("value", help="Config value")
+    cfg_dl = cfg_sub.add_parser("downloads", help="Show download history")
+
     p_help = sub.add_parser("help", help="Show this help")
 
     args = parser.parse_args()
@@ -701,6 +874,9 @@ def main():
         "recommend": cmd_recommend,
         "rec": cmd_recommend,
         "browse": cmd_browse,
+        "workspace": cmd_workspace,
+        "ws": cmd_workspace,
+        "config": cmd_config,
     }
 
     cmd_fn = commands.get(args.command)

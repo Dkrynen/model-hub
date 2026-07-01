@@ -7,25 +7,45 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<div class="sidebar" id="sidebar">
+
+<aside class="sidebar" id="sidebar">
   <div class="sidebar-brand">
-    <span class="brand-icon">⬡</span> Model Hub
+    <svg class="brand-icon" viewBox="0 0 32 32" fill="none">
+      <rect x="2" y="2" width="28" height="28" rx="8" stroke="url(#g)" stroke-width="2"/>
+      <path d="M10 22V10h5a4 4 0 0 1 4 4v0a4 4 0 0 1-4 4h-5" stroke="url(#g)" stroke-width="1.8" stroke-linecap="round"/>
+      <path d="M18 16l5 6M18 16l5-6" stroke="url(#g)" stroke-width="1.8" stroke-linecap="round"/>
+      <defs><linearGradient id="g" x1="0" y1="0" x2="32" y2="32"><stop stop-color="#6c8cff"/><stop offset="1" stop-color="#3ecf8e"/></linearGradient></defs>
+    </svg>
+    <div>
+      <div class="brand-text">Model Hub</div>
+      <div class="brand-sub">Local LLM Manager</div>
+    </div>
     <button class="sidebar-toggle" id="sidebar-toggle" title="Toggle sidebar">&times;</button>
   </div>
+
+  <div class="sidebar-workspace">
+    <span style="color:var(--muted);font-size:0.8rem">&#8981;</span>
+    <select id="workspace-select" onchange="switchWorkspace(this.value)">
+      <option value="">Loading...</option>
+    </select>
+    <button class="ws-manage-btn" id="btn-ws-manage" title="Manage workspaces">&#9881;</button>
+  </div>
+
   <nav>
-    <a class="active" data-page="dashboard" href="#dashboard">Dashboard</a>
-    <a data-page="browse" href="#browse">Browse Models</a>
-    <a data-page="scan" href="#scan">Scan &amp; Recommend</a>
-    <a data-page="models" href="#models">Installed</a>
-    <a data-page="downloads" href="#downloads">Downloads</a>
-    <a data-page="chat" href="#chat">Chat</a>
+    <a class="active" data-page="dashboard" href="#dashboard"><span class="nav-icon">&#9632;</span>Dashboard</a>
+    <a data-page="browse" href="#browse"><span class="nav-icon">&#9776;</span>Browse Models</a>
+    <a data-page="scan" href="#scan"><span class="nav-icon">&#9733;</span>Scan &amp; Recommend</a>
+    <a data-page="models" href="#models"><span class="nav-icon">&#9881;</span>Installed</a>
+    <a data-page="downloads" href="#downloads"><span class="nav-icon">&#9660;</span>Downloads</a>
+    <a data-page="chat" href="#chat"><span class="nav-icon">&#9993;</span>Chat</a>
   </nav>
+
   <div class="sidebar-footer">
     <div id="ollama-badge" class="badge-offline">Ollama: checking...</div>
     <div id="version-badge" style="font-size:0.7rem;color:var(--muted);margin-top:4px"></div>
     <div id="running-models-badge" style="font-size:0.7rem;color:var(--muted);margin-top:2px"></div>
   </div>
-</div>
+</aside>
 
 <div class="main">
 
@@ -134,12 +154,16 @@
 
 <div id="page-downloads" class="page">
   <h1>Downloads</h1>
-  <p>Active and completed model pulls.</p>
+  <p style="margin-bottom:16px;color:var(--muted)">Active and completed model pulls.</p>
   <div class="manual-install" style="margin-bottom:16px">
     <input type="text" id="manual-model-input-dl" placeholder="e.g. qwen3:7b" class="search-input" style="flex:1">
     <button class="btn btn-sm" id="btn-manual-install-dl">Install</button>
   </div>
   <div id="downloads-list"><em>No downloads yet.</em></div>
+  <div id="download-history" style="margin-top:20px">
+    <h2>History</h2>
+    <div class="result-box" id="download-history-list"><em>Loading...</em></div>
+  </div>
 </div>
 
 <div id="page-chat" class="page">

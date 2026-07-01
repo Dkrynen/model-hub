@@ -2,6 +2,7 @@ let systemInfo = null;
 let chatAbort = null;
 let chatHistory = [];
 let ollamaPoll = null;
+let allWorkspaces = [];
 
 const CHAT_STORAGE_KEY = "modelhub-chat";
 const CHAT_MODEL_KEY = "modelhub-chat-model";
@@ -105,6 +106,7 @@ document.addEventListener("DOMContentLoaded", () => {
   initNav();
   checkOllama();
   loadDashboard();
+  loadWorkspaces();
   checkFirstRun();
   checkForUpdates();
   ollamaPoll = setInterval(checkOllama, 10000);
@@ -152,6 +154,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (e.target.id === "btn-list-sessions") showSessionList();
     if (e.target.id === "btn-export-csv") exportRecsCSV();
     if (e.target.id === "sidebar-toggle") toggleSidebar();
+    if (e.target.id === "btn-ws-manage") showWorkspaceManager();
     if (e.target.id === "btn-manual-install" || e.target.id === "btn-manual-install-dl") {
       const input = document.getElementById(e.target.id === "btn-manual-install" ? "manual-model-input" : "manual-model-input-dl");
       const name = input.value.trim();
@@ -178,6 +181,7 @@ function initNav() {
       if (page === "dashboard") loadDashboard();
       if (page === "chat") loadChatModels();
       if (page === "browse") loadBrowse();
+      if (page === "downloads") loadDownloadHistory();
     });
   });
 }
@@ -223,6 +227,7 @@ async function checkFirstRun() {
         </div>
         <h2>Downloads</h2>
         <div id="downloads-list"><em>No downloads yet.</em></div>
+        <div id="download-history" style="margin-top:20px"><h2>History</h2><div class="result-box" id="download-history-list"><em>Not available.</em></div></div>
       `;
     }
   } catch {}
@@ -241,6 +246,91 @@ async function checkForUpdates() {
     document.getElementById("version-badge").textContent = "";
   }
 }
+
+/* Workspace Management */
+
+async function loadWorkspaces() {
+  try {
+    const wsList = await api("GET", "/api/workspaces");
+    allWorkspaces = wsList;
+    const config = await api("GET", "/api/config");
+    const sel = document.getElementById("workspace-select");
+    sel.innerHTML = wsList.map(w =>
+      `<option value="${escHtml(w.id)}" ${w.id === config.workspace ? "selected" : ""}>${escHtml(w.name)}</option>`
+    ).join("");
+    if (wsList.length === 0) {
+      sel.innerHTML = '<option value="default">Default</option>';
+    }
+  } catch {
+    document.getElementById("workspace-select").innerHTML = '<option value="default">Default</option>';
+  }
+}
+
+async function switchWorkspace(id) {
+  if (!id) return;
+  await api("POST", `/api/workspaces/${encodeURIComponent(id)}/switch`);
+  toast(`Switched to workspace`, "success");
+  if (document.getElementById("page-chat").classList.contains("active")) {
+    loadChatModels();
+  }
+}
+
+async function showWorkspaceManager() {
+  const config = await api("GET", "/api/config");
+  const wsList = await api("GET", "/api/workspaces");
+  let html = `<p style="margin-bottom:12px;color:var(--muted);font-size:0.85rem">Current: <strong>${escHtml(config.workspace)}</strong></p>`;
+  html += `<div style="margin-bottom:16px"><strong>Create workspace</strong></div>
+    <div style="display:flex;gap:8px;margin-bottom:16px">
+      <input type="text" id="ws-new-name" placeholder="Workspace name" class="search-input" style="flex:1">
+      <button class="btn btn-sm" id="ws-create-btn">Create</button>
+    </div>`;
+  if (wsList.length) {
+    html += `<div style="margin-bottom:8px"><strong>Existing workspaces</strong></div>`;
+    wsList.forEach(w => {
+      const isCurrent = w.id === config.workspace;
+      const canDelete = w.id !== "default" ? `<button class="btn btn-sm btn-danger ws-delete-btn" data-ws-id="${escHtml(w.id)}">Delete</button>` : "";
+      html += `<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border)">
+        <div><strong>${escHtml(w.name)}</strong> ${isCurrent ? '<span class="badge badge-gpu">current</span>' : ''} <span style="color:var(--muted);font-size:0.8rem">${escHtml(w.description)}</span></div>
+        <div style="display:flex;gap:6px">
+          ${!isCurrent ? `<button class="btn btn-sm btn-secondary ws-switch-btn" data-ws-id="${escHtml(w.id)}">Switch</button>` : ''}
+          ${canDelete}
+        </div>
+      </div>`;
+    });
+  }
+  openModal("Workspaces", html);
+
+  document.getElementById("ws-create-btn").addEventListener("click", async () => {
+    const name = document.getElementById("ws-new-name").value.trim();
+    if (!name) { toast("Enter a name", "error"); return; }
+    await api("POST", "/api/workspaces", { name });
+    toast(`Created "${name}"`, "success");
+    await loadWorkspaces();
+    closeModal();
+    showWorkspaceManager();
+  });
+
+  document.querySelectorAll(".ws-switch-btn").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      await api("POST", `/api/workspaces/${encodeURIComponent(btn.dataset.wsId)}/switch`);
+      toast("Switched workspace", "success");
+      await loadWorkspaces();
+      closeModal();
+    });
+  });
+
+  document.querySelectorAll(".ws-delete-btn").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      if (!confirm(`Delete workspace "${btn.dataset.wsId}"?`)) return;
+      await api("DELETE", `/api/workspaces/${encodeURIComponent(btn.dataset.wsId)}`);
+      toast("Deleted workspace", "info");
+      await loadWorkspaces();
+      closeModal();
+    });
+  });
+}
+
+/* Dashboard */
 
 async function loadDashboard() {
   try {
@@ -308,6 +398,8 @@ async function loadQuickPicks(vram) {
   } catch { div.innerHTML = '<span class="empty-state">Error loading picks</span>'; }
 }
 
+/* Scan & Recommend */
+
 let lastRecs = [];
 
 async function runScan() {
@@ -343,6 +435,7 @@ async function runScanAndRecommend() {
   let html = '<div class="result-box"><h3>System</h3><table>';
   html += `<tr><td>OS</td><td>${escHtml(info.os)}</td></tr>`;
   html += `<tr><td>CPU</td><td>${escHtml(info.cpu)}</td></tr>`;
+  html += `<tr><td>Cores</td><td>${info.cores}</td></tr>`;
   html += `<tr><td>RAM</td><td>${info.ram_gb} GB</td></tr>`;
   if (info.gpus && info.gpus.length) {
     info.gpus.forEach(g => {
@@ -439,6 +532,8 @@ function copyText(text) {
   navigator.clipboard.writeText(text).then(() => toast("Copied to clipboard!", "success")).catch(() => {});
 }
 
+/* Download / Pull */
+
 async function pullModel(modelName) {
   if (!modelName) return;
   const dlDiv = document.getElementById("downloads-list");
@@ -494,6 +589,7 @@ async function pullModel(modelName) {
             status.className = "status done";
             if (title) title.textContent = `${modelName} &mdash; Installed`;
             toast(`Installed ${modelName}`, "success");
+            loadDownloadHistory();
           }
         } catch {}
       }
@@ -504,6 +600,34 @@ async function pullModel(modelName) {
     toast(`Download failed: ${err.message}`, "error");
   }
 }
+
+async function loadDownloadHistory() {
+  const div = document.getElementById("download-history-list");
+  if (!div) return;
+  try {
+    div.innerHTML = '<em>Loading...</em>';
+    const history = await api("GET", "/api/config/downloads");
+    if (!history || !history.length) {
+      div.innerHTML = '<em>No download history yet.</em>';
+      return;
+    }
+    const html = history.slice().reverse().map(e => {
+      const ts = new Date(e.timestamp * 1000).toLocaleString();
+      const statusClass = e.status === "completed" ? "badge-gpu" : (e.status === "failed" ? "badge-cpu" : "badge-offload");
+      const sizeStr = e.size_gb ? ` (${e.size_gb} GB)` : "";
+      return `<div class="dl-history-item">
+        <span class="dl-model">${escHtml(e.model)}</span>
+        <span class="badge ${statusClass} dl-status">${escHtml(e.status)}${sizeStr}</span>
+        <span class="dl-time">${escHtml(ts)}</span>
+      </div>`;
+    }).join("");
+    div.innerHTML = html;
+  } catch {
+    div.innerHTML = '<em>No download history available.</em>';
+  }
+}
+
+/* Installed Models */
 
 function filterInstalledModels() {
   const query = document.getElementById("model-search").value.toLowerCase();
@@ -555,6 +679,8 @@ function runModel(name) {
   copyText(cmd);
   toast(`Copied "${cmd}" to clipboard. Paste in your terminal to run!`, "info");
 }
+
+/* Chat */
 
 async function loadChatModels() {
   const sel = document.getElementById("chat-model");
@@ -688,6 +814,88 @@ function appendChatMessage(role, text, thinking) {
   box.scrollTop = box.scrollHeight;
   return div;
 }
+
+/* Sessions */
+
+async function showSessionList() {
+  try {
+    const config = await api("GET", "/api/config");
+    const sessions = await api("GET", `/api/sessions?workspace=${encodeURIComponent(config.workspace)}`);
+    if (!sessions.length) {
+      toast("No saved sessions in this workspace.", "info");
+      return;
+    }
+    const html = sessions.map(s => {
+      const name = escHtml(s.name || s.id);
+      const model = escHtml(s.model || "?");
+      return `<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border)">
+        <div><strong>${name}</strong> <span style="color:var(--muted);font-size:0.8rem">(${model})</span></div>
+        <button class="btn btn-sm btn-secondary" data-load-session="${s.id}" data-session-name="${name}">Load</button>
+      </div>`;
+    }).join("");
+    openModal("Saved Sessions", `<p style="margin-bottom:12px;color:var(--muted);font-size:0.85rem">${sessions.length} sessions</p>${html}`);
+  } catch {
+    toast("Failed to load sessions.", "error");
+  }
+}
+
+async function loadSessionFromServer(sessionId) {
+  try {
+    const session = await api("GET", `/api/sessions/${sessionId}`);
+    if (session.error) { toast(`Error: ${session.error}`, "error"); return; }
+    const model = session.model || "";
+    const sel = document.getElementById("chat-model");
+    const opt = Array.from(sel.options).find(o => o.value === model);
+    if (opt) {
+      sel.value = model;
+      selectChatModel();
+    }
+    chatHistory = (session.messages || []).map(m => ({ role: m.role, content: m.content }));
+    saveChatState();
+    const box = document.getElementById("chat-box");
+    const welcome = box.querySelector(".chat-welcome");
+    if (welcome) welcome.remove();
+    box.innerHTML = "";
+    chatHistory.forEach(m => {
+      const div = document.createElement("div");
+      div.className = `chat-msg ${m.role}`;
+      const ts = new Date().toLocaleTimeString();
+      const content = m.role === "user" ? escHtml(m.content) : mdToHtml(m.content);
+      div.innerHTML = `<div class="label">${m.role === "user" ? "You" : "Assistant"}</div><div class="bubble">${content}</div><span class="timestamp">${ts}</span>`;
+      box.appendChild(div);
+    });
+    box.scrollTop = box.scrollHeight;
+    closeModal();
+    document.querySelector('[data-page="chat"]').click();
+    toast(`Loaded session with ${chatHistory.length} messages.`, "success");
+  } catch {
+    toast("Failed to load session.", "error");
+  }
+}
+
+/* Running Models */
+
+async function loadRunningModels() {
+  const div = document.getElementById("running-models");
+  const badge = document.getElementById("running-models-badge");
+  try {
+    const r = await api("GET", "/api/ollama/ps");
+    if (!r.running || !r.models.length) {
+      div.innerHTML = '<em>No models currently loaded.</em>';
+      badge.textContent = "";
+      return;
+    }
+    badge.textContent = `${r.models.length} running`;
+    div.innerHTML = r.models.map(m =>
+      `<div style="margin-bottom:4px">${escHtml(m.name)} <span class="badge badge-gpu">${m.size_gb} GB</span></div>`
+    ).join("");
+  } catch {
+    div.innerHTML = '<em>Could not check.</em>';
+    badge.textContent = "";
+  }
+}
+
+/* Browse */
 
 let allBrowseModels = [];
 let browsePageIdx = 0;
@@ -826,80 +1034,5 @@ async function showBrowseDetails(name) {
     `);
   } catch {
     toast("Failed to load tags.", "error");
-  }
-}
-
-async function showSessionList() {
-  try {
-    const sessions = await api("GET", "/api/sessions");
-    if (!sessions.length) {
-      toast("No saved sessions.", "info");
-      return;
-    }
-    const html = sessions.map(s => {
-      const name = escHtml(s.name || s.id);
-      const model = escHtml(s.model || "?");
-      return `<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border)">
-        <div><strong>${name}</strong> <span style="color:var(--muted);font-size:0.8rem">(${model})</span></div>
-        <button class="btn btn-sm btn-secondary" data-load-session="${s.id}" data-session-name="${name}">Load</button>
-      </div>`;
-    }).join("");
-    openModal("Saved Sessions", `<p style="margin-bottom:12px;color:var(--muted);font-size:0.85rem">${sessions.length} sessions</p>${html}`);
-  } catch {
-    toast("Failed to load sessions.", "error");
-  }
-}
-
-async function loadSessionFromServer(sessionId) {
-  try {
-    const session = await api("GET", `/api/sessions/${sessionId}`);
-    if (session.error) { toast(`Error: ${session.error}`, "error"); return; }
-    const model = session.model || "";
-    const sel = document.getElementById("chat-model");
-    const opt = Array.from(sel.options).find(o => o.value === model);
-    if (opt) {
-      sel.value = model;
-      selectChatModel();
-    }
-    chatHistory = (session.messages || []).map(m => ({ role: m.role, content: m.content }));
-    saveChatState();
-    const box = document.getElementById("chat-box");
-    const welcome = box.querySelector(".chat-welcome");
-    if (welcome) welcome.remove();
-    box.innerHTML = "";
-    chatHistory.forEach(m => {
-      const div = document.createElement("div");
-      div.className = `chat-msg ${m.role}`;
-      const ts = new Date().toLocaleTimeString();
-      const content = m.role === "user" ? escHtml(m.content) : mdToHtml(m.content);
-      div.innerHTML = `<div class="label">${m.role === "user" ? "You" : "Assistant"}</div><div class="bubble">${content}</div><span class="timestamp">${ts}</span>`;
-      box.appendChild(div);
-    });
-    box.scrollTop = box.scrollHeight;
-    closeModal();
-    document.querySelector('[data-page="chat"]').click();
-    toast(`Loaded session with ${chatHistory.length} messages.`, "success");
-  } catch {
-    toast("Failed to load session.", "error");
-  }
-}
-
-async function loadRunningModels() {
-  const div = document.getElementById("running-models");
-  const badge = document.getElementById("running-models-badge");
-  try {
-    const r = await api("GET", "/api/ollama/ps");
-    if (!r.running || !r.models.length) {
-      div.innerHTML = '<em>No models currently loaded.</em>';
-      badge.textContent = "";
-      return;
-    }
-    badge.textContent = `${r.models.length} running`;
-    div.innerHTML = r.models.map(m =>
-      `<div style="margin-bottom:4px">${escHtml(m.name)} <span class="badge badge-gpu">${m.size_gb} GB</span></div>`
-    ).join("");
-  } catch {
-    div.innerHTML = '<em>Could not check.</em>';
-    badge.textContent = "";
   }
 }

@@ -4,15 +4,17 @@ Hardware scanner + model recommender + installer + chat for local LLMs.
 
 Scans your GPU, VRAM, RAM, and CPU — then recommends the best models that fit your hardware. Installs and runs models via [Ollama](https://ollama.com).
 
-![Dashboard](https://raw.githubusercontent.com/Dkrynen/model-hub/main/screenshots/dashboard.png)
-
 ## Features
 
 - **Hardware Scan** — detects GPU, VRAM, RAM, CPU on Windows, Linux, and macOS
 - **Smart Recommendations** — 65 curated models scored by quality, speed, hardware fit, and context window
 - **Model Installer** — downloads models via Ollama with live progress bars
 - **Model Management** — list, run, and delete installed models
-- **Built-in Chat** — streaming chat interface powered by Ollama
+- **Built-in Chat** — streaming chat interface with session persistence and Markdown rendering
+- **Workspaces** — organize sessions, models, and downloads into separate workspaces
+- **Download Tracking** — full download history with timestamps and status
+- **Configuration** — persistent settings for host, model, theme, and workspace
+- **Polished CLI** — full subcommand set for management, config, and workspace control
 - **No GPU? No problem** — recommendations work for CPU-only and Apple Silicon too
 
 ## Quick Start
@@ -35,6 +37,29 @@ python server.py
 ```
 
 Open http://127.0.0.1:5050 in your browser.
+
+### CLI Usage
+
+```bash
+# Interactive chat with a model
+python cli.py chat
+
+# List installed models
+python cli.py list
+
+# Install a model
+python cli.py pull llama3.2:3b
+
+# Manage workspaces
+python cli.py workspace list
+python cli.py workspace create "My Project"
+python cli.py workspace switch "My Project"
+
+# View and set configuration
+python cli.py config show
+python cli.py config set ollama_host http://192.168.1.100:11434
+python cli.py config downloads
+```
 
 ### macOS / Linux
 
@@ -85,17 +110,20 @@ iscc installer.iss
 ```
 model-hub/
 ├── server.py              # Entry point
+├── cli.py                 # CLI client
 ├── backend/
-│   ├── api.py             # Flask API
+│   ├── api.py             # Flask API (workspaces, config, sessions, models)
 │   ├── version.py         # Version info
 │   └── cookbook/
+│       ├── config.py      # Workspace & config management
+│       ├── persistence.py # Session persistence (SQLite)
 │       ├── hardware.py    # Hardware detection
 │       ├── recommend.py   # Scoring engine
-│       └── data/models.json  # 65 curated models
+│       └── data/          # Model database & library cache
 ├── frontend/
 │   ├── index.html         # SPA frontend
-│   ├── style.css          # Styles
-│   └── script.js          # Client logic
+│   ├── style.css          # Dark-theme stylesheet
+│   └── script.js          # Client logic with workspace management
 ├── build.spec             # PyInstaller config
 ├── installer.iss          # InnoSetup installer config
 └── .github/workflows/     # CI/CD pipelines
