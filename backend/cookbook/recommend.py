@@ -235,6 +235,11 @@ _RAM_BANDWIDTH = 50.0    # DDR5 via CPU
 # anchor before trusting large-dense-model estimates.
 SPILL_EFFICIENCY = 0.65
 
+# GPU-resident MoE decode takes a slight PENALTY vs dense, not a bonus:
+# irregular per-token expert I/O breaks the clean sequential read pattern
+# that dense bandwidth-bound decode enjoys (spec §4/§9.1).
+MOE_DECODE_PENALTY = 0.9
+
 
 def _estimate_layers(model: ModelEntry) -> int:
     """Rough layer count for the --gpu-layers flag.
@@ -433,6 +438,11 @@ def recommend(info: SystemInfo, use_case: str = "coding",
     return all_recs[:top_k]
 
 
+def speed_regime(split: "SplitPlan") -> str:
+    """Classify a split plan into the speed regime used by _estimate_speed."""
+    return "gpu" if split and split.run_mode == "gpu" else "spilled"
+
+
 def _estimate_speed(model: ModelEntry, quant: QuantInfo, split: SplitPlan,
                     bw_fallback: float = 200.0) -> float:
     """Estimate decode tok/s from the split plan.
@@ -469,7 +479,7 @@ def _estimate_speed(model: ModelEntry, quant: QuantInfo, split: SplitPlan,
     # GPU-resident: bandwidth-bound on the single fast tier.
     total_gb = split.total_model_gb
     bw_eff = sum(a.allocated_gb / max(total_gb, 0.1) * a.bandwidth for a in split.tiers)
-    moe_bonus = 1.2 if model.is_moe else 1.0
+    moe_bonus = MOE_DECODE_PENALTY if model.is_moe else 1.0
     tps = (bw_eff / max(model_gb, 0.5)) * 0.55 * quant.speed_mult * moe_bonus * arch
     return round(tps, 1)
 

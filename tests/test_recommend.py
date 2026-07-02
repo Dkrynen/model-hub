@@ -11,6 +11,7 @@ from backend.cookbook.recommend import (
     _fit_score,
     load_models,
     recommend,
+    speed_regime,
     QUANTS,
 )
 
@@ -121,6 +122,27 @@ def test_moe_speed_uses_active_params():
     s_moe = _estimate_speed(moe, q4, _single_tier(17.7))
     s_dense = _estimate_speed(dense, q4, _single_tier(17.7))
     assert s_moe > s_dense
+
+
+def test_speed_regime_classification():
+    def _plan(mode):
+        return SplitPlan(tiers=[TierAllocation("discrete", "GPU", 16.0, 10.0, "rocm", 0, 512.0, 40)],
+                         total_model_gb=10.0, total_layers=40, gpu_layers=40, run_mode=mode)
+    assert speed_regime(_plan("gpu")) == "gpu"
+    assert speed_regime(_plan("multi_gpu")) == "spilled"
+    assert speed_regime(_plan("cpu_offload")) == "spilled"
+
+
+def test_moe_gpu_resident_not_faster_than_dense():
+    # Research: MoE decode takes a slight PENALTY, not a bonus.
+    def _single(model_gb):
+        return SplitPlan(tiers=[TierAllocation("discrete", "GPU", 16.0, model_gb, "rocm", 0, 512.0, 48)],
+                         total_model_gb=model_gb, total_layers=48, gpu_layers=48, run_mode="gpu")
+    q4 = next(q for q in QUANTS if q.name == "Q4_K_M")
+    moe = ModelEntry("moe:x", "MoE", "x", 30.0, "qwen3", 40960, ["general"], True, active_params_b=3.0)
+    dense = ModelEntry("dense:x", "Dense", "x", 3.0, "qwen3", 40960, ["general"], False)
+    # Same active size (3B) -> MoE must NOT exceed dense (penalty, not bonus).
+    assert _estimate_speed(moe, q4, _single(1.74)) <= _estimate_speed(dense, q4, _single(1.74)) + 0.1
 
 
 # --- the headline bug: 30B-A3B must outrank a 1B toy on 16GB for coding ---
