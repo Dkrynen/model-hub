@@ -987,6 +987,7 @@ def cmd_benchmark(args):
         body["options"]["prompt_cache_disable"] = True  # type: ignore
 
     entries = []
+    logged = 0
     for i in range(repeat):
         result = ollama("POST", "/api/generate", body, timeout=args.timeout or 300)
 
@@ -996,7 +997,8 @@ def cmd_benchmark(args):
 
         entry = _benchmark_metrics(result, model, prompt, num_predict, temperature,
                                     fingerprint=_fp, stack=_stack)
-        _benchmark_log(entry)
+        if _benchmark_log(entry):
+            logged += 1
         entries.append(entry)
 
     entry = entries[-1]
@@ -1017,7 +1019,7 @@ def cmd_benchmark(args):
         print(f"\n{C['bold']}Runs ({repeat}):{C['reset']}          {per_run}")
         print(f"  {C['bold']}Median tok/s:{C['reset']}      {C['green']}{median_tps:.1f}{C['reset']}")
 
-    print(f"\n{C['dim']}Logged {len(entries)} result(s) to ~/.model-hub/benchmarks/results.jsonl{C['reset']}")
+    print(f"\n{C['dim']}Logged {logged} of {len(entries)} result(s) to ~/.model-hub/benchmarks/results.jsonl{C['reset']}")
 
 
 def cmd_browse(args):
