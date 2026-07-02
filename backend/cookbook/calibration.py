@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import statistics
 import urllib.request
 from dataclasses import dataclass, field
@@ -65,15 +66,36 @@ def machine_fingerprint(info, stack: dict) -> str:
     return hashlib.sha1(json.dumps(canon, sort_keys=True).encode()).hexdigest()[:12]
 
 
-def detect_stack(base_url: str = "http://localhost:11434") -> dict:
-    """Best-effort software-stack probe. Never raises."""
+def detect_stack(base_url: str = "http://localhost:11434", info=None) -> dict:
+    """Best-effort software-stack probe. Never raises.
+
+    Backend is inferred only when unambiguous (never guesses the AMD
+    rocm-vs-vulkan case, which needs OLLAMA_LLM_LIBRARY or log parsing —
+    spec §11). OLLAMA_LLM_LIBRARY (the authoritative Ollama override) wins;
+    else Apple Silicon -> metal, NVIDIA -> cuda, otherwise 'unknown'.
+    """
     version = "unknown"
     try:
-        with urllib.request.urlopen(f"{base_url}/api/version", timeout=3) as r:
+        with urllib.request.urlopen(f"{base_url}/api/version", timeout=1.5) as r:
             version = json.loads(r.read().decode()).get("version", "unknown")
     except Exception:
         pass
-    return {"ollama_version": version, "backend": "unknown"}  # backend: see spec §11
+    return {"ollama_version": version, "backend": _infer_backend(info)}
+
+
+def _infer_backend(info) -> str:
+    # OLLAMA_LLM_LIBRARY is the authoritative, user-explicit override and the
+    # only reliable way to distinguish AMD rocm vs vulkan; honor it first.
+    lib = os.environ.get("OLLAMA_LLM_LIBRARY")
+    if lib:
+        return lib.lower()
+    if info is None:
+        return "unknown"
+    if getattr(info, "is_apple_silicon", False):
+        return "metal"
+    if getattr(info, "has_nvidia", False):
+        return "cuda"
+    return "unknown"
 
 
 @dataclass

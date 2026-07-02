@@ -797,7 +797,7 @@ def cmd_recommend(args):
             _cal = None
         else:
             from backend.cookbook.calibration import load_calibration, detect_stack
-            _stack = detect_stack()
+            _stack = detect_stack(info=info)
             _results = str(Path.home() / ".model-hub" / "benchmarks" / "results.jsonl")
             _cal = load_calibration(info, _stack, _results)
 
@@ -966,7 +966,7 @@ def cmd_benchmark(args):
     from backend.cookbook.hardware import detect
     from backend.cookbook.calibration import detect_stack, machine_fingerprint
     _info = detect()
-    _stack = detect_stack()
+    _stack = detect_stack(info=_info)
     _fp = machine_fingerprint(_info, _stack)
 
     print(f"{C['yellow']}Benchmarking {C['bold']}{model}{C['reset']}...")
