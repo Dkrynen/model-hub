@@ -442,3 +442,17 @@ def test_loop_reproduces_measured_on_real_anchors(tmp_path):
     big = next((r for r in recs if r.model.id == "qwen3:30b-a3b"), None)
     assert big is not None
     assert big.speed_source in ("measured", "calibrated")
+
+
+def test_cli_recommend_help_advertises_no_calibration_flag():
+    # Guards that the --no-calibration escape hatch is wired into argparse and
+    # discoverable (its effect, calibration=None, is covered by
+    # test_recommend_defaults_estimated_without_calibration above).
+    import subprocess
+    import sys
+    r = subprocess.run(
+        [sys.executable, "-m", "cli", "recommend", "--help"],
+        capture_output=True, text=True, timeout=10,
+    )
+    assert r.returncode == 0
+    assert "--no-calibration" in r.stdout

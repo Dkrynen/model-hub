@@ -106,3 +106,67 @@ def test_apply_estimated_when_no_data():
 def test_apply_none_calibration_is_estimated():
     tps, src, band = apply_calibration(100.0, "m", "Q8", "spilled", None)
     assert src == "estimated"
+
+
+def test_load_calibration_multi_run_median_and_spread(tmp_path):
+    # 4 runs (even N) also guards the statistics.median fix: the old
+    # index-based upper-median returned 185 here, statistics.median -> 180.
+    import statistics
+    info = _info()
+    p = tmp_path / "results.jsonl"
+    _write_results(p, info, [
+        ("falcon3:3b", 170.0, "match"),
+        ("falcon3:3b", 175.0, "match"),
+        ("falcon3:3b", 185.0, "match"),
+        ("falcon3:3b", 190.0, "match"),
+    ])
+    cal = load_calibration(info, _STACK, str(p))
+    stat = cal.measured[("falcon3:3b", "Q4_K_M")]
+    assert stat.n_runs == 4
+    assert stat.median_tps == statistics.median([170.0, 175.0, 185.0, 190.0])
+    assert stat.spread_pct > 0
+
+def test_load_calibration_loo_band_real_branch(tmp_path):
+    # >=3 matching-fp entries in one regime -> the real LOO band is computed,
+    # not the conservative 35.0 default used for <3 samples.
+    info = _info()
+    p = tmp_path / "results.jsonl"
+    _write_results(p, info, [
+        ("falcon3:3b", 170.0, "match"),
+        ("falcon3:3b", 180.0, "match"),
+        ("falcon3:3b", 190.0, "match"),
+    ])
+    cal = load_calibration(info, _STACK, str(p))
+    band = cal.regime_band_pct["gpu"]
+    assert band != 35.0 and 0 < band < 30
+
+def test_fingerprint_multi_gpu_does_not_raise():
+    # Regression: sorted() over a generator of dicts raised TypeError when
+    # there was more than one GPU. Must classify without raising and stay
+    # stable across calls.
+    info = SystemInfo(os="Windows", cpu="x", cpu_cores=6, ram_gb=30.9,
+                      gpus=[GPUInfo("AMD Radeon RX 6800 XT", 16.0, backend="rocm"),
+                            GPUInfo("Intel Arc A380", 2.0, backend="cuda")],
+                      total_vram_gb=18.0)
+    s = {"ollama_version": "0.31.1", "backend": "vulkan"}
+    fp = machine_fingerprint(info, s)
+    assert machine_fingerprint(info, s) == fp
+
+def test_infer_backend_env_overrides(monkeypatch):
+    from backend.cookbook.calibration import _infer_backend
+    monkeypatch.setenv("OLLAMA_LLM_LIBRARY", "vulkan")
+    assert _infer_backend(_info()) == "vulkan"
+
+def test_infer_backend_amd_stays_unknown(monkeypatch):
+    # rocm-vs-vulkan on AMD is genuinely ambiguous -> must not guess.
+    from backend.cookbook.calibration import _infer_backend
+    monkeypatch.delenv("OLLAMA_LLM_LIBRARY", raising=False)
+    assert _infer_backend(_info()) == "unknown"
+
+def test_infer_backend_nvidia_cuda(monkeypatch):
+    from backend.cookbook.calibration import _infer_backend
+    monkeypatch.delenv("OLLAMA_LLM_LIBRARY", raising=False)
+    info = SystemInfo(os="Windows", cpu="x", cpu_cores=8, ram_gb=32.0,
+                      gpus=[GPUInfo("NVIDIA RTX 4090", 24.0, backend="cuda")],
+                      total_vram_gb=24.0, has_nvidia=True)
+    assert _infer_backend(info) == "cuda"
