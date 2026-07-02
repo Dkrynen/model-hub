@@ -400,3 +400,45 @@ def test_recommend_surfaces_measured_source():
 def test_recommend_defaults_estimated_without_calibration():
     recs = recommend(_sys_handoff(), use_case="coding", top_k=5)
     assert all(r.speed_source == "estimated" for r in recs)
+
+
+def test_loop_reproduces_measured_on_real_anchors(tmp_path):
+    # End-to-end regression: results.jsonl (this session's real benchmark
+    # anchors) -> load_calibration -> recommend() should reproduce the
+    # measured tok/s for qwen3:30b-a3b Q4_K_M, not the theoretical estimate.
+    #
+    # NOTE: recommend() keeps only the single best-composite-score quant per
+    # model (see recommend.py `best_rec` selection), so Q4_K_M is not
+    # guaranteed to be the quant that surfaces in top_k results for this
+    # model on this synthetic rig (Q5_K_M/F16 can out-score it on the
+    # composite even though Q4_K_M is the measured anchor). We therefore
+    # verify the exact reproduction at the apply_calibration layer (Task 6's
+    # wiring contract) AND verify end-to-end that recommend() surfaces the
+    # model with a calibration-derived speed_source, matching the pattern
+    # already used by test_recommend_surfaces_measured_source above.
+    import json
+    from backend.cookbook.calibration import load_calibration, machine_fingerprint, apply_calibration
+    info = _sys_handoff()
+    stack = {"ollama_version": "0.31.1", "backend": "vulkan"}
+    fp = machine_fingerprint(info, stack)
+    p = tmp_path / "results.jsonl"
+    with open(p, "w") as f:
+        for tag, tps in [("qwen3:30b-a3b-q4_K_M", 22.9), ("qwen3:30b-a3b-q8_0", 12.6),
+                         ("falcon3:3b", 177.9)]:
+            f.write(json.dumps({"model": tag, "tokens_per_second": tps,
+                                "eval_count": 128, "fingerprint": fp}) + "\n")
+    cal = load_calibration(info, stack, str(p))
+
+    # Exact measured override -> ~22.9 tok/s (this IS the loop reproducing
+    # the measured session value, at the layer that owns that contract).
+    tok_s, source, _band = apply_calibration(999.0, "qwen3:30b-a3b", "Q4_K_M", "spilled", cal)
+    assert source == "measured"
+    assert abs(tok_s - 22.9) < 0.01
+
+    # End-to-end: recommend() picks up the calibration and surfaces the
+    # model with a calibration-influenced source (measured or calibrated),
+    # never falling back to a bare uncalibrated estimate for this model.
+    recs = recommend(info, use_case="coding", top_k=91, calibration=cal)
+    big = next((r for r in recs if r.model.id == "qwen3:30b-a3b"), None)
+    assert big is not None
+    assert big.speed_source in ("measured", "calibrated")
