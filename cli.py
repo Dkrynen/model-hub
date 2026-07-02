@@ -23,6 +23,7 @@ import argparse
 import json
 import os
 import shutil
+import statistics
 import subprocess
 import sys
 import time
@@ -842,7 +843,8 @@ def _benchmark_log(entry: dict):
 
 
 def _benchmark_metrics(result: dict, model: str, prompt: str,
-                       num_predict: int, temperature: float) -> dict:
+                       num_predict: int, temperature: float,
+                       fingerprint: str | None = None, stack: dict | None = None) -> dict:
     """Turn an Ollama /api/generate response into a benchmark log entry.
 
     tokens_per_second = generated tokens / generation (eval) time.
@@ -856,7 +858,7 @@ def _benchmark_metrics(result: dict, model: str, prompt: str,
     prompt_eval_duration_ns = result.get("prompt_eval_duration", 0)
     ttft_ms = (load_duration_ns + prompt_eval_duration_ns) / 1_000_000
     tokens_per_second = eval_count / (eval_duration_ns / 1e9) if eval_duration_ns > 0 else 0
-    return {
+    entry = {
         "model": model,
         "prompt": prompt,
         "prompt_len": len(prompt),
@@ -871,6 +873,11 @@ def _benchmark_metrics(result: dict, model: str, prompt: str,
         "time_to_first_token_ms": round(ttft_ms, 1),
         "response": result.get("response", ""),
     }
+    if fingerprint:
+        entry["fingerprint"] = fingerprint
+    if stack:
+        entry["stack"] = stack
+    return entry
 
 
 def _benchmark_history() -> list[dict]:
@@ -945,10 +952,17 @@ def cmd_benchmark(args):
     prompt = args.prompt or "Write a short function in Python that calculates fibonacci numbers."
     num_predict = args.num_predict or 128
     temperature = args.temperature or 0.0
+    repeat = args.repeat or 1
+
+    from backend.cookbook.hardware import detect
+    from backend.cookbook.calibration import detect_stack, machine_fingerprint
+    _info = detect()
+    _stack = detect_stack()
+    _fp = machine_fingerprint(_info, _stack)
 
     print(f"{C['yellow']}Benchmarking {C['bold']}{model}{C['reset']}...")
     print(f"{C['gray']}  prompt: {prompt[:60]}...{C['reset']}")
-    print(f"{C['gray']}  num_predict: {num_predict}, temperature: {temperature}{C['reset']}\n")
+    print(f"{C['gray']}  num_predict: {num_predict}, temperature: {temperature}, repeat: {repeat}{C['reset']}\n")
 
     body = {
         "model": model,
@@ -963,16 +977,22 @@ def cmd_benchmark(args):
     if args.no_cache:
         body["options"]["prompt_cache_disable"] = True  # type: ignore
 
-    start = time.time()
-    result = ollama("POST", "/api/generate", body, timeout=args.timeout or 300)
-    elapsed = time.time() - start
+    entries = []
+    for i in range(repeat):
+        result = ollama("POST", "/api/generate", body, timeout=args.timeout or 300)
 
-    if "error" in result:
-        eprint(f"{C['red']}Error: {result['error']}{C['reset']}")
-        sys.exit(1)
+        if "error" in result:
+            eprint(f"{C['red']}Error: {result['error']}{C['reset']}")
+            sys.exit(1)
 
-    entry = _benchmark_metrics(result, model, prompt, num_predict, temperature)
-    log_path = _benchmark_log(entry)
+        entry = _benchmark_metrics(result, model, prompt, num_predict, temperature,
+                                    fingerprint=_fp, stack=_stack)
+        _benchmark_log(entry)
+        entries.append(entry)
+
+    entry = entries[-1]
+    tps_values = [e["tokens_per_second"] for e in entries]
+    median_tps = statistics.median(tps_values)
 
     print_header("Results")
     print(f"  {C['bold']}Model:{C['reset']}             {model}")
@@ -983,8 +1003,12 @@ def cmd_benchmark(args):
     print(f"  {C['bold']}Time to first token:{C['reset']} {entry['time_to_first_token_ms']:.0f} ms")
     print(f"  {C['bold']}Response length:{C['reset']}    {len(entry['response'])} chars")
 
-    if log_path:
-        print(f"\n{C['dim']}Logged to {log_path}{C['reset']}")
+    if repeat > 1:
+        per_run = ", ".join(f"{v:.1f}" for v in tps_values)
+        print(f"\n{C['bold']}Runs ({repeat}):{C['reset']}          {per_run}")
+        print(f"  {C['bold']}Median tok/s:{C['reset']}      {C['green']}{median_tps:.1f}{C['reset']}")
+
+    print(f"\n{C['dim']}Logged {len(entries)} result(s) to ~/.model-hub/benchmarks/results.jsonl{C['reset']}")
 
 
 def cmd_browse(args):
@@ -1222,6 +1246,7 @@ def main():
     p_bench.add_argument("--temperature", type=float, default=0.0, help="Sampling temperature (default: 0)")
     p_bench.add_argument("--timeout", type=int, default=300, help="Request timeout in seconds (default: 300)")
     p_bench.add_argument("--no-cache", action="store_true", help="Disable prompt cache for fresh eval")
+    p_bench.add_argument("--repeat", type=int, default=1, help="Run N times and report median tok/s (default: 1)")
     p_bench.add_argument("--list", action="store_true", help="Show benchmark history")
     p_bench.add_argument("--export", metavar="FILE", help="Export results to CSV/JSON/JSONL")
 

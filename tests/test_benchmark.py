@@ -96,6 +96,16 @@ def test_benchmark_metrics_ttft_is_load_plus_prompt_not_eval_duration():
     assert entry["tokens_per_second"] == 20.0
 
 
+def test_benchmark_entry_can_carry_fingerprint():
+    from cli import _benchmark_metrics
+    result = {"eval_count": 100, "eval_duration": 5_000_000_000,
+              "load_duration": 1_000_000_000, "prompt_eval_duration": 1_000_000_000,
+              "total_duration": 7_000_000_000, "response": "ok"}
+    entry = _benchmark_metrics(result, "m:1b", "hi", 100, 0.0, fingerprint="abc123", stack={"ollama_version": "0.31.1"})
+    assert entry["fingerprint"] == "abc123"
+    assert entry["stack"]["ollama_version"] == "0.31.1"
+
+
 def test_cli_help_includes_benchmark():
     import subprocess
     import sys
