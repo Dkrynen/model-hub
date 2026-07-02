@@ -1,3 +1,4 @@
+import functools
 import json
 import os
 from dataclasses import dataclass, field
@@ -138,7 +139,10 @@ CONTEXT_TARGETS = {"general": 4096, "coding": 8192, "reasoning": 8192, "chat": 4
 DATA_DIR = Path(__file__).parent / "data"
 
 
+@functools.lru_cache(maxsize=1)
 def load_models() -> list[ModelEntry]:
+    # Catalog is read-only app data; memoize so repeated callers (recommend(),
+    # load_calibration, parse_model_tag) share one JSON parse per process.
     path = DATA_DIR / "models.json"
     if not path.exists():
         raise FileNotFoundError(f"Model database not found at {path}")
