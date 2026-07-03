@@ -8,7 +8,11 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
@@ -36,18 +40,27 @@ jobs:
           PYTEST_ADDOPTS: "-m 'not live'"
         run: python -m pytest -v
 
-  test-windows:
-    runs-on: windows-latest
-    timeout-minutes: 20
+  web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
         with:
-          python-version: "3.11"
-      - run: pip install uv
-      - run: |
-          uv pip install --system -r requirements.txt
-          uv pip install --system pytest pytest-asyncio apispec
-      - env:
-          PYTEST_ADDOPTS: "-m 'not live'"
-        run: python -m pytest -v
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install
+        working-directory: web
+        run: npm ci
+
+      - name: Typecheck
+        working-directory: web
+        run: npm run typecheck
+
+      - name: Build
+        working-directory: web
+        run: npm run build
