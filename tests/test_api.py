@@ -147,3 +147,46 @@ def test_benchmark_streams_runs_and_median(flask_app, isolated_home, monkeypatch
 
     from backend.cookbook.benchmark import history
     assert len(history()) == 2
+
+
+def _fake_detect_factory():
+    """Return a factory that builds a fresh 2-GPU SystemInfo per detect() call."""
+    from backend.cookbook.hardware import SystemInfo, GPUInfo, build_compute_tiers
+
+    def make():
+        gpus = [
+            GPUInfo(name="Big GPU", vram_gb=16.0, backend="cuda", device_index=0),
+            GPUInfo(name="Small GPU", vram_gb=4.0, backend="cuda", device_index=1),
+        ]
+        return SystemInfo(
+            os="Test", cpu="Test CPU", cpu_cores=8, ram_gb=64.0,
+            gpus=gpus, total_vram_gb=16.0, combined_vram_gb=20.0,
+            compute_tiers=build_compute_tiers(gpus, 64.0, False),
+        )
+
+    return make
+
+
+def test_recommend_gpu_mask_reduces_combined_vram(monkeypatch, flask_app, isolated_home):
+    from backend import api as api_mod
+    monkeypatch.setattr(api_mod, "detect", _fake_detect_factory())
+
+    client = flask_app.test_client()
+    r_all = client.get("/api/recommend?use_case=general&top_k=3")
+    assert r_all.get_json()["combined_vram_gb"] == 20.0
+
+    r_masked = client.get("/api/recommend?use_case=general&top_k=3&gpu_mask=0")
+    assert r_masked.get_json()["combined_vram_gb"] == 16.0
+
+
+def test_recommend_no_spill_zeroes_ram(monkeypatch, flask_app, isolated_home):
+    from backend import api as api_mod
+    monkeypatch.setattr(api_mod, "detect", _fake_detect_factory())
+
+    client = flask_app.test_client()
+    r = client.get("/api/recommend?use_case=general&top_k=10&allow_spill=0")
+    assert r.status_code == 200
+    data = r.get_json()
+    assert data["ram_gb"] == 0.0
+    for rec in data["recommendations"]:
+        assert rec["run_mode"] != "cpu_offload"

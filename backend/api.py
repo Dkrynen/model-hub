@@ -123,6 +123,8 @@ def api_recommend():
     use_case = request.args.get("use_case", default="coding")
     top_k = request.args.get("top_k", type=int, default=5)
     no_calibration = request.args.get("no_calibration", type=int, default=0)
+    gpu_mask_raw = request.args.get("gpu_mask", "")
+    allow_spill = request.args.get("allow_spill", type=int, default=1)
 
     info = detect()
     if vram and vram > 0:
@@ -133,6 +135,18 @@ def api_recommend():
         if not info.gpus:
             from .cookbook.hardware import GPUInfo
             info.gpus = [GPUInfo(name=f"Manual ({vram} GB)", vram_gb=vram, backend="cuda")]
+
+    mask = {int(x) for x in gpu_mask_raw.split(",") if x.strip().isdigit()} if gpu_mask_raw else set()
+    if mask:
+        info.gpus = [g for g in info.gpus if g.device_index in mask]
+        info.compute_tiers = [t for t in info.compute_tiers if t.kind == "ram" or t.device_index in mask]
+        gpu_vrams = [g.vram_gb for g in info.gpus]
+        info.total_vram_gb = round(max(gpu_vrams), 1) if gpu_vrams else 0.0
+        info.combined_vram_gb = round(sum(gpu_vrams), 1) if gpu_vrams else 0.0
+
+    if not allow_spill:
+        info.compute_tiers = [t for t in info.compute_tiers if t.kind != "ram"]
+        info.ram_gb = 0.0
 
     # Build the per-machine calibration from benchmarked results (mirrors cli.cmd_recommend).
     if no_calibration:
