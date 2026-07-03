@@ -4,7 +4,7 @@
 
 APT is a local-LLM manager built around one question: *what's the best model this machine can actually run?* It scans your GPU/VRAM/RAM/CPU, ranks models against your real hardware (including multi-GPU and RAM-spill split plans), installs them via [Ollama](https://ollama.com), and then — this is the part nobody else does — **calibrates its own predictions against real benchmarks of your rig**, so recommendations get more accurate the more you use it.
 
-<!-- TODO(launch): hero screenshot / demo GIF here -->
+<!-- TODO(launch): replace with a 10-15s screengrab GIF showing: aptm scan → aptm recommend → aptm benchmark. Record at 1080p, terminal on dark bg. -->
 
 ## Features
 
@@ -19,7 +19,7 @@ APT is a local-LLM manager built around one question: *what's the best model thi
 
 ### Windows (recommended)
 
-Download the latest `Model-Hub-Setup-x.x.x.exe` from [Releases](https://github.com/Dkrynen/model-hub/releases) and run it.
+Download the latest `APT-Setup-x.x.x.exe` from [Releases](https://github.com/Dkrynen/model-hub/releases) and run it.
 
 ### Any platform (CLI via pipx)
 

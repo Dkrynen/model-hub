@@ -1,6 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
-PyInstaller build spec for Model Hub.
+PyInstaller build spec for APT.
 
 Produces a single portable .exe with embedded frontend.
 

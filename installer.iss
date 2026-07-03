@@ -1,10 +1,10 @@
-; InnoSetup script for Model Hub
+; InnoSetup script for APT
 ; Build the .exe first with: pyinstaller build.spec
 ; Then compile: iscc installer.iss
 
-#define MyAppName "Model Hub"
+#define MyAppName "APT"
 #define MyAppVersion "2.2.0"
-#define MyAppPublisher "Model Hub Contributors"
+#define MyAppPublisher "Duan Krynen"
 #define MyAppURL "https://github.com/Dkrynen/model-hub"
 #define MyAppExeName "model-hub.exe"
 
@@ -21,7 +21,7 @@ DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 LicenseFile=LICENSE
 OutputDir=dist
-OutputBaseFilename=Model-Hub-Setup-{#MyAppVersion}
+OutputBaseFilename=APT-Setup-{#MyAppVersion}
 SetupIconFile=
 Compression=lzma2/max
 SolidCompression=yes

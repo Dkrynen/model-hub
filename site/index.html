@@ -29,6 +29,7 @@
   .btn-ghost:hover { border-color: var(--accent); text-decoration: none; }
   .hint { margin-top: 14px; font-size: 13px; color: var(--fg-faint); }
   code { background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; padding: 2px 7px; font-size: 13.5px; }
+  .tag { display: inline-block; background: var(--accent-soft); color: var(--accent-hover); font-size: 11px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; padding: 3px 10px; border-radius: 20px; margin-bottom: 10px; }
 
   .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; margin: 24px 0 64px; }
   .card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 26px; }
@@ -51,7 +52,19 @@
   .pro li { margin: 6px 0; }
   .price { font-weight: 700; color: var(--fg); }
 
+  .testimonials { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-top: 22px; }
+  .testimonial { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 22px; }
+  .testimonial q { color: var(--fg-muted); font-size: 14.5px; font-style: italic; }
+  .testimonial .attribution { margin-top: 10px; font-size: 13px; color: var(--fg-faint); }
+
   footer { padding: 40px 0 56px; color: var(--fg-faint); font-size: 13.5px; text-align: center; }
+
+  @media (max-width: 600px) {
+    header { padding: 56px 0 40px; }
+    .cta-row .btn { width: 100%; text-align: center; }
+    .waitlist form { flex-direction: column; }
+    .waitlist input[type=email] { min-width: auto; }
+  }
 </style>
 </head>
 <body>
@@ -83,22 +96,39 @@
          predictions against them. The more you benchmark, the smarter it gets about your machine.</p>
     </div>
     <div class="card">
-      <div class="k">Tune</div>
-      <h3>Make it faster</h3>
-      <p>APT Pro sweeps GPU-offload configs, benchmarks each, and bakes the fastest into a
-         ready-to-run tuned model. Your rig, at its actual ceiling.</p>
+      <div class="k">Chat</div>
+      <h3>Built-in chat &amp; web UI</h3>
+      <p>Full chat interface, web dashboard on <code>:5050</code>, and a terminal TUI.
+         However you like to work, APT has a face for it.</p>
     </div>
   </div>
 </div>
+
+<section id="pro">
+  <div class="wrap">
+    <span class="tag">Pro</span>
+    <h2>The last 30% is where the time goes</h2>
+    <p class="lead">Everything above is free, forever. Pro is for squeezing out every tok/s your hardware can deliver — automatically.</p>
+    <div class="pro">
+      <ul>
+        <li><strong>Stop guessing your GPU offload.</strong> <code>apt pro tune</code> benchmarks every layer-split config on your exact rig and applies the fastest one. No more afternoon wasted manually tweaking <code>num_gpu</code>.</li>
+        <li><strong>Save optimal settings per model.</strong> Switch between models without re-tuning. Layer splits, context presets, iGPU control — one profile per model, applied automatically.</li>
+        <li><strong>Know when something changed.</strong> Insights tracks your tok/s baseline over time and flags the moment a driver update, OS patch, or model swap costs you performance.</li>
+      </ul>
+      <p><span class="price">$3/month billed annually</span> — activation via license key, no account needed.</p>
+      <a class="btn btn-primary" href="https://buy.polar.sh/polar_cl_jGkeY1nYS0xdgVGAxdFLn7M0yeovlR9FVtyqY1Mh9HX" style="margin-top: 8px;">Get APT Pro</a>
+    </div>
+  </div>
+</section>
 
 <section id="waitlist">
   <div class="wrap">
     <h2>macOS &amp; Linux — coming soon</h2>
     <p class="lead">The Windows app ships first. Native macOS and Linux apps are next,
-       each as its own release. Join the waitlist and you'll hear the moment yours lands.</p>
+       each as its own release. Join the waitlist and you&rsquo;ll hear the moment yours lands.</p>
     <div class="waitlist">
       <strong>Get notified</strong>
-      <!-- TODO(launch): replace with a real form endpoint (Tally / Buttondown) before announcing -->
+      <!-- TODO(launch): replace with real endpoint — Tally.so form or Buttondown newsletter -->
       <form action="mailto:dkrynen9@gmail.com?subject=APT%20waitlist" method="post" enctype="text/plain">
         <input type="email" name="email" placeholder="you@example.com" required>
         <button class="btn btn-primary" type="submit">Join the waitlist</button>
@@ -107,25 +137,41 @@
   </div>
 </section>
 
-<section id="pro">
+<section id="faq">
   <div class="wrap">
-    <h2>APT Pro — the Tuning Cockpit</h2>
-    <p class="lead">Everything above is free, forever. Pro is for squeezing out the last 30%.</p>
-    <div class="pro">
-      <ul>
-        <li><code>apt pro tune &lt;model&gt;</code> — auto-tuner: sweep offload configs, benchmark each, apply the winner</li>
-        <li>Per-model offload controls — layer splits, iGPU control, context presets</li>
-        <li>Insights — calibration history and regression alerts ("slower since that driver update")</li>
-      </ul>
-      <p><span class="price">Cheap subscription — priced under $5/month.</span>
-         <!-- TODO(launch): swap for the LemonSqueezy checkout link -->
-         Launching with the app. The <a href="#waitlist">waitlist</a> hears first.</p>
+    <h2>Frequently asked</h2>
+    <div class="cards">
+      <div class="card">
+        <h3>Does APT require Ollama?</h3>
+        <p>Yes. APT manages models through Ollama. Install <a href="https://ollama.com/download">Ollama</a> first — APT handles the rest.</p>
+      </div>
+      <div class="card">
+        <h3>Is it actually free?</h3>
+        <p>The core — hardware scan, recommendations, benchmarking, chat, web UI, TUI — is MIT open source and always will be. Pro features are a paid add-on.</p>
+      </div>
+      <div class="card">
+        <h3>Will my data leave my machine?</h3>
+        <p>No. Everything runs locally. No telemetry, no cloud, no accounts. Your models never leave your hardware.</p>
+      </div>
+      <div class="card">
+        <h3>What GPUs are supported?</h3>
+        <p>NVIDIA (all), AMD via Vulkan (RX 6800 XT verified), Apple Silicon M-series, Intel Arc. CPU-only works too — just slower.</p>
+      </div>
+      <div class="card">
+        <h3>Why <code>aptm</code> instead of <code>apt</code>?</h3>
+        <p>Debian already owns <code>apt</code> on Linux. Windows keeps <code>apt</code>; Linux/macOS use <code>aptm</code> (APT-manager).</p>
+      </div>
+      <div class="card">
+        <h3>Is there a GUI?</h3>
+        <p>Desktop app (Windows installer) + web UI on <code>:5050</code> + full terminal TUI. Pick your interface.</p>
+      </div>
     </div>
   </div>
 </section>
 
 <footer class="wrap">
-  APT · <a href="https://github.com/Dkrynen/model-hub">GitHub</a> · MIT (core) ·
+  APT · <a href="https://github.com/Dkrynen/model-hub">GitHub</a> ·
+  <a href="https://github.com/Dkrynen/model-hub/blob/master/LICENSE">MIT (core)</a> ·
   built by <a href="https://github.com/Dkrynen">Duan Krynen</a>
 </footer>
 
