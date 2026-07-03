@@ -8,6 +8,7 @@ import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { BenchmarkDialog } from "@/components/benchmark-dialog";
 import { useAsync } from "@/lib/hooks";
 import { api } from "@/lib/api";
 import { fmtParams, fmtContext } from "@/lib/utils";
@@ -165,8 +166,11 @@ export function Scan() {
       </Card>
 
       {/* Recommendations table */}
-      <div className="mb-3 mt-6 flex items-center gap-2 text-[13px] font-semibold uppercase tracking-[0.12em] text-fg-faint">
-        <Gauge className="h-4 w-4" /> Top picks
+      <div className="mb-3 mt-6 flex items-center justify-between">
+        <div className="flex items-center gap-2 text-[13px] font-semibold uppercase tracking-[0.12em] text-fg-faint">
+          <Gauge className="h-4 w-4" /> Top picks
+        </div>
+        <BenchmarkDialog onDone={() => recs.reload()} />
       </div>
 
       {recs.error ? (
