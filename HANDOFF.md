@@ -81,8 +81,30 @@ cheap-subscription Pro via LemonSqueezy, Windows-first launch with teased macOS/
      `apt pro status` -> `apt pro tune` unlocked -> `apt pro deactivate`.
   4. Replace the placeholder upgrade URL in `apt_pro/license.py::_UPGRADE_MSG`
      when the landing page exists (Plan 3).
-- **Plan 3** — release engineering (CI matrix, installers, rebrand, secrets sweep,
-  landing page + waitlist, core packaging rename).
+- **Plan 3 DONE (2026-07-03)** — repo is launch-grade: full-history secrets sweep PASSED
+  (repo was already public; 56 commits, zero credential patterns); tri-OS CI matrix + web
+  gates (`test.yml`); pip/pipx installable (`pyproject.toml`, command `aptm`, dist name
+  `apt-hub`, PyPI upload deferred to name-freeze); release pipeline fixed + locally proven
+  (`build.yml`: web/dist now bundled into the exe — it WAS shipping the legacy UI — full
+  deps, draft release, Windows-only assets; exe built + booted + verified serving the React
+  UI); APT rebrand (README/CONTRIBUTING/issue templates/CHANGELOG); landing page + waitlist
+  (`site/` + `pages.yml`).
+
+### LAUNCH CHECKLIST (Duan-gated, in order)
+1. Review README + `site/index.html` copy in your voice; add real screenshots/GIF
+   (TODO markers are in both files).
+2. `git push origin master` — publishes everything (history is sweep-clean).
+3. Watch the tri-OS CI matrix go green (first real run of the new workflows).
+4. Repo Settings → Pages → Source: "GitHub Actions" → landing page goes live at
+   dkrynen.github.io/model-hub.
+5. LemonSqueezy store (checklist above) → product id into apt-pro → real checkout
+   link into README + site (TODO markers).
+6. Swap the waitlist mailto placeholder for a real form (Tally/Buttondown).
+7. Pick the launch version → bump `backend/version.py` → `git tag vX.Y.Z &&
+   git push --tags` → build workflow produces the draft Release with the installer
+   → download + smoke the installer on a clean machine → publish the Release.
+8. Announce. (macOS/Linux releases each get their own launch moment later —
+   waitlist decides which ships second.)
 
 ### C — Partial conditional activation (not started)
 MoE expert pruning, early exit, speculative decoding, dynamic quant — all still research. No code written.
