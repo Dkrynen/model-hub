@@ -73,11 +73,15 @@ export async function* sse(
 
 export const api = {
   scan: () => getJSON<import("./types").ScanInfo>("/api/scan"),
-  recommend: (params: { vram?: number; use_case?: string; top_k?: number } = {}) => {
+  recommend: (
+    params: { vram?: number; use_case?: string; top_k?: number; gpu_mask?: number[]; allow_spill?: boolean } = {}
+  ) => {
     const q = new URLSearchParams();
     if (params.vram) q.set("vram", String(params.vram));
     if (params.use_case) q.set("use_case", params.use_case);
     if (params.top_k) q.set("top_k", String(params.top_k));
+    if (params.gpu_mask && params.gpu_mask.length > 0) q.set("gpu_mask", params.gpu_mask.join(","));
+    if (params.allow_spill === false) q.set("allow_spill", "0");
     return getJSON<import("./types").RecommendResponse>(`/api/recommend?${q}`);
   },
   catalog: () => getJSON<import("./types").CatalogModel[]>("/api/models"),

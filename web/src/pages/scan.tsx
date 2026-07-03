@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { useAsync } from "@/lib/hooks";
 import { api } from "@/lib/api";
 import { fmtParams, fmtContext } from "@/lib/utils";
@@ -26,13 +27,27 @@ export function Scan() {
   const [useCase, setUseCase] = useState("coding");
   const [manualVram, setManualVram] = useState(0);
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [disabledGpus, setDisabledGpus] = useState<Set<number>>(new Set());
+  const [allowSpill, setAllowSpill] = useState(true);
 
   const detectedVram = scan.data?.total_vram_gb ?? 0;
   const effectiveVram = manualVram > 0 ? manualVram : detectedVram;
 
+  const gpuMask =
+    scan.data && disabledGpus.size > 0
+      ? scan.data.gpus.map((g) => g.device_index).filter((i) => !disabledGpus.has(i))
+      : undefined;
+
   const recs = useAsync(
-    () => api.recommend({ use_case: useCase, top_k: 12, vram: effectiveVram || undefined }),
-    [useCase, effectiveVram]
+    () =>
+      api.recommend({
+        use_case: useCase,
+        top_k: 12,
+        vram: effectiveVram || undefined,
+        gpu_mask: gpuMask,
+        allow_spill: allowSpill,
+      }),
+    [useCase, effectiveVram, Array.from(disabledGpus).join(","), allowSpill]
   );
 
   return (
@@ -123,6 +138,30 @@ export function Scan() {
             </button>
           )}
         </div>
+        {scan.data && scan.data.gpus.length > 0 && (
+          <div className="flex flex-wrap items-center gap-4">
+            {scan.data.gpus.map((g) => (
+              <label key={g.device_index} className="flex items-center gap-2 text-[12px] text-fg-muted">
+                <Switch
+                  checked={!disabledGpus.has(g.device_index)}
+                  onCheckedChange={(on) => {
+                    setDisabledGpus((prev) => {
+                      const next = new Set(prev);
+                      if (on) next.delete(g.device_index);
+                      else next.add(g.device_index);
+                      return next;
+                    });
+                  }}
+                />
+                <span>{g.name} · {g.vram_gb} GB</span>
+              </label>
+            ))}
+            <label className="flex items-center gap-2 text-[12px] text-fg-muted">
+              <Switch checked={allowSpill} onCheckedChange={setAllowSpill} />
+              <span>Allow RAM spill</span>
+            </label>
+          </div>
+        )}
       </Card>
 
       {/* Recommendations table */}
