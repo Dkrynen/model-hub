@@ -1,101 +1,54 @@
-# Model Hub
+# APT — local AI, sorted.
 
-Hardware scanner + model recommender + installer + chat for local LLMs.
+**Scans your hardware. Recommends models that actually fit. Benchmarks real tok/s — not guesses.**
 
-Scans your GPU, VRAM, RAM, and CPU — then recommends the best models that fit your hardware. Installs and runs models via [Ollama](https://ollama.com).
+APT is a local-LLM manager built around one question: *what's the best model this machine can actually run?* It scans your GPU/VRAM/RAM/CPU, ranks models against your real hardware (including multi-GPU and RAM-spill split plans), installs them via [Ollama](https://ollama.com), and then — this is the part nobody else does — **calibrates its own predictions against real benchmarks of your rig**, so recommendations get more accurate the more you use it.
+
+<!-- TODO(launch): hero screenshot / demo GIF here -->
 
 ## Features
 
-- **Hardware Scan** — detects GPU, VRAM, RAM, CPU on Windows, Linux, and macOS
-- **Smart Recommendations** — 65 curated models scored by quality, speed, hardware fit, and context window
-- **Model Installer** — downloads models via Ollama with live progress bars
-- **Model Management** — list, run, and delete installed models
-- **Built-in Chat** — streaming chat interface with session persistence and Markdown rendering
-- **Workspaces** — organize sessions, models, and downloads into separate workspaces
-- **Download Tracking** — full download history with timestamps and status
-- **Configuration** — persistent settings for host, model, theme, and workspace
-- **Polished CLI** — full subcommand set for management, config, and workspace control
-- **No GPU? No problem** — recommendations work for CPU-only and Apple Silicon too
+- **Hardware scan** — GPU, VRAM, RAM, CPU on Windows, Linux, macOS (NVIDIA, AMD, Apple Silicon, Intel)
+- **Fit-aware recommendations** — 91-model curated catalog scored by quality, speed, hardware fit, and context; multi-GPU tiering (dGPU → iGPU → RAM) with per-model split plans
+- **Real-speed calibration** — `aptm benchmark` measures actual tok/s and feeds a per-machine calibration loop; recs are tagged `measured` / `calibrated` / `estimated` with confidence bands
+- **What-if controls** — toggle GPUs on/off, allow/deny RAM spill, and watch the recommendations recompute live in the web UI
+- **Model management + chat** — install, run, delete; streaming chat with session persistence; full TUI
+- **Benchmark from the browser** — one dialog, live per-run tok/s, recommendations recalibrate on completion
 
-## Quick Start
+## Install
 
-### Option 1: Download the installer (Windows)
+### Windows (recommended)
 
-Download the latest `Model-Hub-Setup-x.x.x.exe` from the [Releases page](https://github.com/Dkrynen/model-hub/releases).
+Download the latest `Model-Hub-Setup-x.x.x.exe` from [Releases](https://github.com/Dkrynen/model-hub/releases) and run it.
 
-### Option 2: Run from source
+### Any platform (CLI via pipx)
 
 ```bash
-# 1. Install Ollama (required for model downloads)
-#    https://ollama.com/download
-
-# 2. Clone and run
-git clone https://github.com/Dkrynen/model-hub.git
-cd model-hub
-pip install flask
-python server.py
+# Requires Python 3.10+ and Ollama (https://ollama.com/download)
+pipx install git+https://github.com/Dkrynen/model-hub
+aptm scan          # what am I working with?
+aptm recommend     # what should I run on it?
+aptm benchmark llama3.2:3b   # real tok/s -> calibrates future recs
+aptm chat          # TUI chat
 ```
 
-Open http://127.0.0.1:5050 in your browser.
+> The command is `aptm` (APT-manager) — deliberately not `apt`, your Debian package manager stays untouched.
 
-### CLI Usage
+### macOS & Linux apps
 
-```bash
-# Interactive chat with a model
-python cli.py chat
+Coming soon — **[join the waitlist](https://dkrynen.github.io/model-hub/)** and each platform release lands in your inbox.
 
-# List installed models
-python cli.py list
+## APT Pro — the Tuning Cockpit
 
-# Install a model
-python cli.py pull llama3.2:3b
+The free tier is complete and stays free. **APT Pro** adds the power tools:
 
-# Manage workspaces
-python cli.py workspace list
-python cli.py workspace create "My Project"
-python cli.py workspace switch "My Project"
+- **`apt pro tune <model>`** — sweeps GPU-offload configurations (auto / all layers / 75% / 50%), benchmarks each on *your* hardware, and bakes the fastest into a ready-to-use `<model>-tuned` variant
+- **Offload controls** — per-model layer splits, iGPU control, context presets
+- **Insights** — calibration history and regression detection ("your tok/s dropped 12% since that driver update")
 
-# View and set configuration
-python cli.py config show
-python cli.py config set ollama_host http://192.168.1.100:11434
-python cli.py config downloads
-```
+Cheap subscription, priced to be a no-brainer. Landing soon — the [waitlist](https://dkrynen.github.io/model-hub/) hears first.
 
-### macOS / Linux
-
-```bash
-python3 server.py
-```
-
-## Building from Source
-
-### Package as standalone .exe
-
-```bash
-pip install pyinstaller
-pyinstaller build.spec
-```
-
-Distribution will be in `dist/model-hub.exe`.
-
-### Create Windows installer
-
-```bash
-# Build .exe first
-pyinstaller build.spec
-
-# Then compile with InnoSetup
-iscc installer.iss
-```
-
-## System Requirements
-
-- **OS**: Windows 10+, macOS 13+, Linux (x86_64)
-- **Python**: 3.10+ (when running from source)
-- **Ollama**: Required for model installation and chat
-- **GPU**: Optional — CPU-only mode works with system RAM
-
-## Hardware Detection
+## Hardware detection
 
 | GPU | Method | Verified |
 |-----|--------|----------|
@@ -105,30 +58,25 @@ iscc installer.iss
 | Apple Silicon | `sysctl` unified memory | M-series |
 | Intel | Registry fallback | Arc, UHD, Iris |
 
-## Project Structure
+## Development
 
+```bash
+git clone https://github.com/Dkrynen/model-hub && cd model-hub
+python -m venv .venv && .venv/Scripts/pip install -r requirements.txt  # or bin/ on POSIX
+.venv/Scripts/python server.py        # Flask + web UI on :5050
+cd web && npm ci && npm run dev       # Vite dev server (proxies /api)
+.venv/Scripts/python -m pytest -q    # test suite
 ```
-model-hub/
-├── server.py              # Entry point
-├── cli.py                 # CLI client
-├── backend/
-│   ├── api.py             # Flask API (workspaces, config, sessions, models)
-│   ├── version.py         # Version info
-│   └── cookbook/
-│       ├── config.py      # Workspace & config management
-│       ├── persistence.py # Session persistence (SQLite)
-│       ├── hardware.py    # Hardware detection
-│       ├── recommend.py   # Scoring engine
-│       └── data/          # Model database & library cache
-├── frontend/
-│   ├── index.html         # SPA frontend
-│   ├── style.css          # Dark-theme stylesheet
-│   └── script.js          # Client logic with workspace management
-├── build.spec             # PyInstaller config
-├── installer.iss          # InnoSetup installer config
-└── .github/workflows/     # CI/CD pipelines
-```
+
+Plugins mount via the `apt.plugins` entry-point group — see [docs/PLUGINS.md](docs/PLUGINS.md). Contributions welcome: [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## System requirements
+
+- **OS**: Windows 10+, macOS 13+, Linux (x86_64)
+- **Python**: 3.10+ (CLI/source installs)
+- **Ollama**: required for model install, chat, and benchmarking
+- **GPU**: optional — CPU-only and Apple Silicon fully supported
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+Core: MIT — see [LICENSE](LICENSE). APT Pro is a commercial add-on.

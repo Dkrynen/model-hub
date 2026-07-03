@@ -1,5 +1,14 @@
 # Changelog
 
+## [Unreleased]
+
+- **Real-speed calibration loop** — `aptm benchmark` results (per-machine + software-stack fingerprint) now calibrate recommendations; recs tagged `measured`/`calibrated`/`estimated` with confidence bands
+- **Web technical controls** — calibration badges, expandable per-model split-plan rows, per-GPU on/off + RAM-spill what-if toggles, browser benchmark dialog with live tok/s streaming
+- **Open-core plugin seam** — plugins mount via the `apt.plugins` entry-point group (CLI subcommands + API routes, per-plugin error isolation); `aptm plugins`, `GET /api/plugins`, authoring guide in docs/PLUGINS.md
+- **APT Pro (separate add-on)** — Tuning Cockpit: `apt pro tune` offload auto-tuner with `--apply`, license activation, calibration insights
+- **Packaging** — pip/pipx-installable (`aptm` console script); release pipeline now bundles the React UI into the Windows exe (previously shipped the legacy UI); tri-OS CI matrix
+- Fixes: GPU masking now keyed to real device indices assigned during tier building; `aptm benchmark --export *.csv` no longer crashes (missing import)
+
 ## 2.1.0 (2026-07-01)
 
 - **Critical bugfix: `OLLAMA_HOST` NameError** — undefined variable in `ollama()` and `ollama_stream()` error handlers now correctly call `get_host()`
