@@ -52,7 +52,9 @@ I'm working on **Apt** — a local LLM manager (hardware scan → model recommen
 
 **Everything below D2 is DONE and superseded by the v1 public-launch effort.**
 Spec: `docs/superpowers/specs/2026-07-02-apt-v1-public-launch-design.md` (open-core,
-cheap-subscription Pro via LemonSqueezy, Windows-first launch with teased macOS/Linux).
+cheap-subscription Pro, Windows-first launch with teased macOS/Linux). **Licensing
+provider superseded 2026-07-03: LemonSqueezy -> Polar.sh** (apt-pro commit `a4494fa`;
+spec doc still says LemonSqueezy, that's historical).
 
 - **Calibration loop** — DONE + merged (measured > calibrated > estimated; per-machine
   fingerprint; `apt benchmark` feeds it).
@@ -70,17 +72,20 @@ cheap-subscription Pro via LemonSqueezy, Windows-first launch with teased macOS/
 ### Remaining
 - Live smoke of `apt pro tune llama3.2:3b --repeat 1` with Ollama up (mocked suite green;
   license gate + CLI discovery proven live).
-- **Plan 2 code DONE (2026-07-03)** — LS activation/grace/insights live in apt-pro
-  (`apt pro activate/deactivate/insights`; check() revalidates every 3 days, 14-day
-  offline grace, hard-locks on explicit invalid; legacy v1 grants still work).
-  Duan-gated to finish licensing:
-  1. Create LemonSqueezy account + store + "APT Pro" product (subscription variant,
-     license keys ENABLED, activation limit e.g. 3).
-  2. Put the product id into `apt_pro/activate.py::APT_PRO_PRODUCT_ID`.
-  3. Test mode: generate a test license key -> `apt pro activate <key>` ->
+- **Plan 2 code DONE (2026-07-03), licensing provider swapped to Polar.sh same day** —
+  activation/grace/insights live in apt-pro (`apt pro activate/deactivate/insights`;
+  check() revalidates every 3 days, 14-day offline grace, hard-locks on explicit
+  invalid; legacy v1 grants still work). Originally built against LemonSqueezy
+  (commit `cffee99`); rewritten against Polar's customer-portal license-keys API
+  (commit `a4494fa`, 47/47 tests green) — real Polar org + benefit UUIDs are wired
+  into `apt_pro/ls.py` / `apt_pro/activate.py`, no placeholder IDs left.
+  Remaining, Duan-gated:
+  1. Confirm the Polar organization/product/checkout is fully live in the Polar
+     dashboard (checkout link is already in `site/index.html`, added 2026-07-03).
+  2. Test mode: generate a real license key -> `apt pro activate <key>` ->
      `apt pro status` -> `apt pro tune` unlocked -> `apt pro deactivate`.
-  4. Replace the placeholder upgrade URL in `apt_pro/license.py::_UPGRADE_MSG`
-     when the landing page exists (Plan 3).
+  3. Upgrade-message URL in `apt_pro/license.py::_UPGRADE_MSG` already points at
+     the live GitHub Pages site (`dkrynen.github.io/model-hub/#pro`) — DONE.
 - **Plan 3 DONE (2026-07-03)** — repo is launch-grade: full-history secrets sweep PASSED
   (repo was already public; 56 commits, zero credential patterns); tri-OS CI matrix + web
   gates (`test.yml`); pip/pipx installable (`pyproject.toml`, command `aptm`, dist name
