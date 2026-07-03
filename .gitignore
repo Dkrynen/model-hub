@@ -17,3 +17,8 @@ env/
 .vscode/
 .idea/
 *.db
+.env
+credentials.json
+token.json
+license.json
+.superpowers/
