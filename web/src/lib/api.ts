@@ -117,7 +117,7 @@ export const api = {
   chat(model: string, messages: { role: string; content: string }[], signal?: AbortSignal) {
     return sse("/api/ollama/chat", { model, messages }, signal);
   },
-  /** Stream a benchmark run. Yields {run,tps,...} frames then {done:true,median_tps,runs}. */
+  /** Stream a benchmark run. Yields {run,tokens_per_second,...} frames then {done:true,median_tps,runs}. */
   benchmark(model: string, opts: { repeat?: number } = {}, signal?: AbortSignal) {
     return sse("/api/benchmark", { model, repeat: opts.repeat ?? 2 }, signal);
   },
