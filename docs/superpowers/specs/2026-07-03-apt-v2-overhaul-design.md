@@ -19,9 +19,11 @@ Four workstreams, each its own implementation plan:
 | W2 | Surfaces | Web + Desktop (pywebview) from one codebase; CLI reborn as an agentic chat TUI |
 | W3 | Rebrand — "Forge" | Warm graphite + copper, die mark; replaces iris everywhere |
 | W4 | Security posture | Supply-chain CI, verified localhost bind, plugin trust, honest update path |
+| W5 | Hardware identity & format fitment | Vendor/architecture identity card + vendor-native format awareness (annotate-only) |
 
-**Build order: W3 → W1 → W2 → W4.** Rationale: brand tokens are upstream of every screen the
-other workstreams touch; W4 is cheap and must simply be green before anything is pushed.
+**Build order: W3 → W1 → W5 → W2 → W4.** Rationale: brand tokens are upstream of every screen
+the other workstreams touch; W5 builds on W1's explain/deep-dive seams; W4 is cheap and must
+simply be green before anything is pushed.
 
 ## 2. Decisions locked (do not re-litigate)
 
@@ -44,6 +46,14 @@ From the 2026-07-03 session with Duan (handoff `HANDOFF-v2-overhaul.md` + this b
    Azure Trusted Signing (~$10/mo) is the preferred path when revenue justifies it.
 8. Name stays **apt** (dist `apt-hub`, command `aptm` on POSIX — Debian collision rule stands).
 9. No servers of ours. Distribution load = GitHub CDN; licensing = LemonSqueezy. Their problem.
+10. Vendor/format fitment scope = **annotate + identity** (Duan, this session): v2 detects and
+    renders hardware identity (vendor, architecture, backend, driver) and annotates
+    vendor-native format opportunities (e.g., NVFP4 on Blackwell). APT still executes
+    everything through Ollama. **Multi-runtime execution (vLLM/TensorRT-LLM/MLX) is a seeded
+    v2.1 candidate — possibly Pro** — not in this overhaul.
+11. Vendor-fitment is **shown, not ranked** (Duan, this session): badges + deep-dive
+    explanations only; no scoring influence until calibration/benchmarks prove the deltas —
+    consistent with the never-fabricate-numbers credo.
 
 ## 3. W3 — Rebrand: "Forge"
 
@@ -219,7 +229,47 @@ and the update path. No servers of ours.
 5. **Code signing:** deferred post-revenue (locked, §2.7). Landing page + README state the
    SmartScreen reality plainly.
 
-## 7. Cross-cutting
+## 7. W5 — Hardware identity & format fitment (annotate-only)
+
+Make the machine a first-class character in the product: APT knows *what* your silicon is, not
+just how big it is — and tells you which model formats are native to it. Execution stays
+Ollama/GGUF; this workstream is detection + data + display. Nothing here changes scores (§2.11).
+
+### 7.1 Hardware identity
+
+- **Detection:** extend the existing scan (`backend/cookbook/hardware.py` — `GPUInfo` already
+  carries `name/vram_gb/driver/backend/device_index`) with derived identity fields:
+  `vendor` (nvidia/amd/apple/intel, derived from name — the same matching the PowerShell probe
+  already does) and `architecture` (e.g., RDNA2, RDNA3, Ada, Ampere, Hopper, Blackwell, Apple
+  M-series) via a conservative name→architecture lookup table in a new data module. Unknown
+  stays `None` — **never guess** (same precedent as the conservative rocm/vulkan backend
+  inference in `calibration.detect_stack()`).
+- **Rendering:** the dashboard hardware hero and scan page grow an identity card: vendor chip
+  (text wordmark chip, NOT vendor logos — trademark-safe), GPU name, architecture, backend
+  (CUDA/ROCm/Vulkan/Metal), driver, VRAM. The TUI banner's model line gains the short form
+  (e.g., `RX 6800 XT · RDNA2 · vulkan`).
+
+### 7.2 Format fitment (annotate)
+
+- **Data layer:** a static, data-as-code module (`backend/cookbook/formats.py`) mapping
+  vendor/architecture capability → native format support: NVFP4 (Blackwell), FP8 (Ada/Hopper/
+  Blackwell), AWQ/GPTQ/EXL2 (CUDA-class), MLX (Apple Silicon), GGUF (universal baseline).
+  Plus a curated per-model-family flag for families with known official vendor-native releases.
+  Conservative and easily updated; entries carry a one-line source note.
+- **Display:** where a detected capability intersects a recommended model family, the model
+  card gains a neutral **"native path"** badge, and the deep-dive expander (W1) explains it
+  honestly — e.g., "Blackwell detected: this family ships an official NVFP4 build; ~native FP4
+  throughput is available via TensorRT-LLM/vLLM, outside Ollama. APT runs the GGUF build."
+- **Hard rules:** annotation never alters ranking (§2.11); no fabricated throughput claims for
+  paths APT can't measure; unknown architecture → no fitment claims at all.
+
+### 7.3 Error handling
+
+Identity fields are optional everywhere: an unmatched GPU name renders today's UI unchanged
+(no identity card degradation artifacts, no "unknown" scare-labels — absent means absent).
+Format annotations require BOTH a confident architecture match AND a curated family entry.
+
+## 8. Cross-cutting
 
 - **Repos:** core `C:\Users\User\repos\model-hub` (venv `.venv\Scripts\python.exe`); Pro
   `C:\Users\User\repos\apt-pro` (tests with core's venv; NEVER gets a remote). Nothing pushed to
@@ -233,13 +283,18 @@ and the update path. No servers of ours.
   v2 branding — that checklist (push, CI, Pages, LS store, waitlist, tag, release, announce)
   remains the launch gate and is *out of scope here*.
 
-## 8. Out of scope (YAGNI, explicit)
+## 9. Out of scope (YAGNI, explicit)
 
 Tauri shell · macOS/Linux polished installers (tease strategy stands) · in-app auto-update ·
 crowd-benchmark cloud (Phase 3) · renaming away from APT · light-theme-first design · TUI feature
-parity with web (the TUI is chat-first; the web is the visual surface) · code signing.
+parity with web (the TUI is chat-first; the web is the visual surface) · code signing ·
+**multi-runtime execution** (vLLM/TensorRT-LLM/MLX recommend-and-run — seeded v2.1, possibly
+Pro) · vendor-fitment scoring influence (waits for measured evidence).
 
 ## Changelog
 
 - 2026-07-03: Initial spec from the v2-overhaul brainstorm (brand fork resolved via visual
   companion: Forge; deep-dive shape: global toggle; deep-dive tier: free; signing: deferred).
+- 2026-07-03 (later): Added W5 — hardware identity & format fitment (Duan: annotate + identity
+  in v2; show-only, rank-later; multi-runtime execution seeded for v2.1). Build order now
+  W3 → W1 → W5 → W2 → W4.
