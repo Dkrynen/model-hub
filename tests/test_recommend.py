@@ -239,6 +239,37 @@ def test_build_compute_tiers_order():
     assert tiers[2].device_index == -1
 
 
+def test_build_compute_tiers_assigns_gpuinfo_device_index():
+    """Real detector output never sets GPUInfo.device_index (defaults to 0 for
+    every GPU). build_compute_tiers must assign it back onto the source
+    GPUInfo objects so it agrees with the corresponding ComputeTier, in the
+    same discrete-first-then-integrated order."""
+    gpus = [
+        GPUInfo("AMD Radeon(TM) Graphics", 10.5, backend="rocm"),  # integrated
+        GPUInfo("AMD Radeon RX 6800 XT", 16.0, backend="rocm"),    # discrete
+    ]
+    # Simulate real detector output: nobody set device_index, so both default to 0.
+    assert gpus[0].device_index == 0
+    assert gpus[1].device_index == 0
+
+    tiers = build_compute_tiers(gpus, 30.9)
+
+    # discrete (RX 6800 XT) sorts first -> index 0; integrated -> index 1.
+    discrete_gpu = next(g for g in gpus if g.name == "AMD Radeon RX 6800 XT")
+    integrated_gpu = next(g for g in gpus if g.name == "AMD Radeon(TM) Graphics")
+    assert discrete_gpu.device_index == 0
+    assert integrated_gpu.device_index == 1
+
+    # Indices must be unique per GPU and match their corresponding tiers.
+    indices = [g.device_index for g in gpus]
+    assert len(set(indices)) == len(indices)
+
+    discrete_tier = next(t for t in tiers if t.kind == "discrete")
+    integrated_tier = next(t for t in tiers if t.kind == "integrated")
+    assert discrete_tier.device_index == discrete_gpu.device_index
+    assert integrated_tier.device_index == integrated_gpu.device_index
+
+
 def test_build_compute_tiers_single_gpu():
     gpus = [GPUInfo("NVIDIA RTX 4090", 24.0, backend="cuda")]
     tiers = build_compute_tiers(gpus, 64.0)

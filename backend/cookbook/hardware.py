@@ -345,6 +345,8 @@ def build_compute_tiers(gpus: list[GPUInfo], ram_gb: float,
     typical HIP/CUDA device ordering (dGPU = 0, iGPU = 1).
     """
     if is_apple_silicon:
+        if gpus:
+            gpus[0].device_index = 0
         return [ComputeTier(
             name=gpus[0].name if gpus else "Apple Silicon",
             memory_gb=gpus[0].vram_gb if gpus else ram_gb,
@@ -363,12 +365,14 @@ def build_compute_tiers(gpus: list[GPUInfo], ram_gb: float,
     tiers: list[ComputeTier] = []
     idx = 0
     for gpu in discrete:
+        gpu.device_index = idx  # detection paths never set this; the tier order is the source of truth
         tiers.append(ComputeTier(
             name=gpu.name, memory_gb=gpu.vram_gb, backend=gpu.backend,
             kind="discrete", device_index=idx,
         ))
         idx += 1
     for gpu in integrated:
+        gpu.device_index = idx
         tiers.append(ComputeTier(
             name=gpu.name, memory_gb=gpu.vram_gb, backend=gpu.backend,
             kind="integrated", device_index=idx,

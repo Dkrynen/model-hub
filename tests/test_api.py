@@ -150,13 +150,18 @@ def test_benchmark_streams_runs_and_median(flask_app, isolated_home, monkeypatch
 
 
 def _fake_detect_factory():
-    """Return a factory that builds a fresh 2-GPU SystemInfo per detect() call."""
+    """Return a factory that builds a fresh 2-GPU SystemInfo per detect() call.
+
+    Mirrors real detector output: GPUInfo.device_index is left at its default
+    (0) for every GPU -- build_compute_tiers() is responsible for assigning
+    real, unique indices, just like it does on real hardware.
+    """
     from backend.cookbook.hardware import SystemInfo, GPUInfo, build_compute_tiers
 
     def make():
         gpus = [
-            GPUInfo(name="Big GPU", vram_gb=16.0, backend="cuda", device_index=0),
-            GPUInfo(name="Small GPU", vram_gb=4.0, backend="cuda", device_index=1),
+            GPUInfo(name="Big GPU", vram_gb=16.0, backend="cuda"),
+            GPUInfo(name="Small GPU", vram_gb=4.0, backend="cuda"),
         ]
         return SystemInfo(
             os="Test", cpu="Test CPU", cpu_cores=8, ram_gb=64.0,
@@ -190,3 +195,41 @@ def test_recommend_no_spill_zeroes_ram(monkeypatch, flask_app, isolated_home):
     assert data["ram_gb"] == 0.0
     for rec in data["recommendations"]:
         assert rec["run_mode"] != "cpu_offload"
+
+
+def test_recommend_gpu_mask_isolates_second_gpu_via_assigned_index(monkeypatch, flask_app, isolated_home):
+    """Real-shape regression: the fake GPUInfo objects never hand-set
+    device_index (defaults only, like real detectors). build_compute_tiers
+    must assign real indices so gpu_mask=1 actually isolates the second GPU
+    (the 4.0 GB 'Small GPU'), not silently fail to filter."""
+    from backend import api as api_mod
+    monkeypatch.setattr(api_mod, "detect", _fake_detect_factory())
+
+    client = flask_app.test_client()
+    r_masked = client.get("/api/recommend?use_case=general&top_k=3&gpu_mask=1")
+    assert r_masked.status_code == 200
+    assert r_masked.get_json()["combined_vram_gb"] == 4.0
+
+
+def test_recommend_gpu_mask_unmatched_is_ignored(monkeypatch, flask_app, isolated_home):
+    """A mask that matches zero real GPU indices must be ignored entirely --
+    never serve a zero-GPU result because of a bad/stale mask."""
+    from backend import api as api_mod
+    monkeypatch.setattr(api_mod, "detect", _fake_detect_factory())
+
+    client = flask_app.test_client()
+    r = client.get("/api/recommend?use_case=general&top_k=3&gpu_mask=99")
+    assert r.status_code == 200
+    assert r.get_json()["combined_vram_gb"] == 20.0
+
+
+def test_recommend_gpu_mask_malformed_entries_dropped_then_ignored(monkeypatch, flask_app, isolated_home):
+    """Malformed mask entries are dropped; if nothing valid remains, the mask
+    is a no-op (full unmasked result), not a zero-GPU result."""
+    from backend import api as api_mod
+    monkeypatch.setattr(api_mod, "detect", _fake_detect_factory())
+
+    client = flask_app.test_client()
+    r = client.get("/api/recommend?use_case=general&top_k=3&gpu_mask=abc,,-1")
+    assert r.status_code == 200
+    assert r.get_json()["combined_vram_gb"] == 20.0

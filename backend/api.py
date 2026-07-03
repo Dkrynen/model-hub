@@ -138,11 +138,13 @@ def api_recommend():
 
     mask = {int(x) for x in gpu_mask_raw.split(",") if x.strip().isdigit()} if gpu_mask_raw else set()
     if mask:
-        info.gpus = [g for g in info.gpus if g.device_index in mask]
-        info.compute_tiers = [t for t in info.compute_tiers if t.kind == "ram" or t.device_index in mask]
-        gpu_vrams = [g.vram_gb for g in info.gpus]
-        info.total_vram_gb = round(max(gpu_vrams), 1) if gpu_vrams else 0.0
-        info.combined_vram_gb = round(sum(gpu_vrams), 1) if gpu_vrams else 0.0
+        masked_gpus = [g for g in info.gpus if g.device_index in mask]
+        if masked_gpus:  # fail-safe: a mask matching no GPU is ignored, never a zero-GPU result
+            info.gpus = masked_gpus
+            info.compute_tiers = [t for t in info.compute_tiers if t.kind == "ram" or t.device_index in mask]
+            gpu_vrams = [g.vram_gb for g in info.gpus]
+            info.total_vram_gb = round(max(gpu_vrams), 1)
+            info.combined_vram_gb = round(sum(gpu_vrams), 1)
 
     if not allow_spill:
         info.compute_tiers = [t for t in info.compute_tiers if t.kind != "ram"]
