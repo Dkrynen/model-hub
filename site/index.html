@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>APT — local AI, sorted.</title>
+<meta name="description" content="Scans your hardware. Recommends local LLMs that actually fit. Benchmarks real tok/s — not guesses.">
+<style>
+  :root {
+    --bg: #09090B; --panel: #131316; --panel-2: #1A1A1F; --line: #26262C;
+    --fg: #EDEDF0; --fg-muted: #9C9CA6; --fg-faint: #6B6B75;
+    --accent: #6E7BF2; --accent-hover: #8B96F5; --accent-soft: rgba(110,123,242,.14);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: var(--bg); color: var(--fg); font: 16px/1.6 ui-sans-serif, system-ui, "Segoe UI", sans-serif; }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 0 24px; }
+  a { color: var(--accent-hover); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  header { padding: 96px 0 64px; text-align: center; }
+  .logo { font-size: 15px; letter-spacing: .28em; text-transform: uppercase; color: var(--accent); font-weight: 700; }
+  h1 { font-size: clamp(34px, 6vw, 56px); font-weight: 800; letter-spacing: -0.02em; margin: 18px 0 14px; }
+  .sub { font-size: 19px; color: var(--fg-muted); max-width: 620px; margin: 0 auto 34px; }
+  .cta-row { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+  .btn { display: inline-block; padding: 13px 26px; border-radius: 10px; font-weight: 600; font-size: 15px; }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-primary:hover { background: var(--accent-hover); text-decoration: none; }
+  .btn-ghost { border: 1px solid var(--line); color: var(--fg); background: var(--panel); }
+  .btn-ghost:hover { border-color: var(--accent); text-decoration: none; }
+  .hint { margin-top: 14px; font-size: 13px; color: var(--fg-faint); }
+  code { background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; padding: 2px 7px; font-size: 13.5px; }
+
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; margin: 24px 0 64px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 26px; }
+  .card .k { font-size: 12px; letter-spacing: .18em; text-transform: uppercase; color: var(--accent); font-weight: 700; }
+  .card h3 { margin: 10px 0 8px; font-size: 19px; }
+  .card p { color: var(--fg-muted); font-size: 14.5px; }
+
+  section { padding: 48px 0; border-top: 1px solid var(--line); }
+  h2 { font-size: 26px; margin-bottom: 10px; }
+  .lead { color: var(--fg-muted); max-width: 640px; }
+
+  .waitlist { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 32px; margin-top: 22px; }
+  .waitlist form { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
+  .waitlist input[type=email] { flex: 1; min-width: 220px; background: var(--bg); border: 1px solid var(--line);
+    border-radius: 10px; padding: 12px 14px; color: var(--fg); font-size: 15px; }
+  .waitlist input[type=email]:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+
+  .pro { border: 1px solid var(--accent); border-radius: 14px; padding: 32px; margin-top: 22px; background: var(--accent-soft); }
+  .pro ul { margin: 14px 0 18px 20px; color: var(--fg-muted); }
+  .pro li { margin: 6px 0; }
+  .price { font-weight: 700; color: var(--fg); }
+
+  footer { padding: 40px 0 56px; color: var(--fg-faint); font-size: 13.5px; text-align: center; }
+</style>
+</head>
+<body>
+
+<header class="wrap">
+  <div class="logo">APT</div>
+  <h1>Local AI, sorted.</h1>
+  <p class="sub">Scans your hardware. Recommends local LLMs that actually fit.
+     Benchmarks real tok/s on <em>your</em> rig — not guesses off a spec sheet.</p>
+  <div class="cta-row">
+    <a class="btn btn-primary" href="https://github.com/Dkrynen/model-hub/releases/latest">Download for Windows</a>
+    <a class="btn btn-ghost" href="https://github.com/Dkrynen/model-hub">View on GitHub</a>
+  </div>
+  <p class="hint">CLI on any platform: <code>pipx install git+https://github.com/Dkrynen/model-hub</code> → <code>aptm scan</code></p>
+</header>
+
+<div class="wrap">
+  <div class="cards">
+    <div class="card">
+      <div class="k">Fit</div>
+      <h3>Will it run?</h3>
+      <p>91 curated models scored against your real GPU, VRAM, RAM — including multi-GPU
+         tiering and RAM-spill split plans. Toggle hardware on/off and watch the answer change.</p>
+    </div>
+    <div class="card">
+      <div class="k">Dyno</div>
+      <h3>Real numbers, not vibes</h3>
+      <p>One-click benchmarks measure actual tokens/second, and APT calibrates its own
+         predictions against them. The more you benchmark, the smarter it gets about your machine.</p>
+    </div>
+    <div class="card">
+      <div class="k">Tune</div>
+      <h3>Make it faster</h3>
+      <p>APT Pro sweeps GPU-offload configs, benchmarks each, and bakes the fastest into a
+         ready-to-run tuned model. Your rig, at its actual ceiling.</p>
+    </div>
+  </div>
+</div>
+
+<section id="waitlist">
+  <div class="wrap">
+    <h2>macOS &amp; Linux — coming soon</h2>
+    <p class="lead">The Windows app ships first. Native macOS and Linux apps are next,
+       each as its own release. Join the waitlist and you'll hear the moment yours lands.</p>
+    <div class="waitlist">
+      <strong>Get notified</strong>
+      <!-- TODO(launch): replace with a real form endpoint (Tally / Buttondown) before announcing -->
+      <form action="mailto:dkrynen9@gmail.com?subject=APT%20waitlist" method="post" enctype="text/plain">
+        <input type="email" name="email" placeholder="you@example.com" required>
+        <button class="btn btn-primary" type="submit">Join the waitlist</button>
+      </form>
+    </div>
+  </div>
+</section>
+
+<section id="pro">
+  <div class="wrap">
+    <h2>APT Pro — the Tuning Cockpit</h2>
+    <p class="lead">Everything above is free, forever. Pro is for squeezing out the last 30%.</p>
+    <div class="pro">
+      <ul>
+        <li><code>apt pro tune &lt;model&gt;</code> — auto-tuner: sweep offload configs, benchmark each, apply the winner</li>
+        <li>Per-model offload controls — layer splits, iGPU control, context presets</li>
+        <li>Insights — calibration history and regression alerts ("slower since that driver update")</li>
+      </ul>
+      <p><span class="price">Cheap subscription — priced under $5/month.</span>
+         <!-- TODO(launch): swap for the LemonSqueezy checkout link -->
+         Launching with the app. The <a href="#waitlist">waitlist</a> hears first.</p>
+    </div>
+  </div>
+</section>
+
+<footer class="wrap">
+  APT · <a href="https://github.com/Dkrynen/model-hub">GitHub</a> · MIT (core) ·
+  built by <a href="https://github.com/Dkrynen">Duan Krynen</a>
+</footer>
+
+</body>
+</html>
