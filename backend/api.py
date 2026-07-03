@@ -887,3 +887,43 @@ def run_server(host="127.0.0.1", port=5050, debug=False):
     # Pre-warm the library cache in the background so Browse loads instantly.
     threading.Thread(target=_fetch_library, daemon=True).start()
     app.run(host=host, port=port, debug=debug)
+
+
+# --- plugin seam -----------------------------------------------------------
+
+def _discover_plugins_safe():
+    """Call plugins.discover(), isolating discovery-itself failures.
+
+    Mirrors the CLI-layer guard in cli.py: a broken discover() (e.g. a
+    corrupt entry point) must never break core — warn and act as if no
+    plugins are installed.
+    """
+    from backend import plugins as _plugins
+    try:
+        return _plugins.discover()
+    except Exception as e:  # noqa: BLE001 — discovery failure must not kill the API
+        print(f"[plugins] discovery failed: {e}")
+        return []
+
+
+@app.route("/api/plugins")
+def api_plugins():
+    return jsonify([
+        {"name": p.name, "version": p.version, "ok": p.ok, "error": p.error}
+        for p in _discover_plugins_safe()
+    ])
+
+
+def _mount_plugins(flask_app):
+    """Call each plugin's register_api(app). Isolated: a broken plugin logs and moves on."""
+    for p in _discover_plugins_safe():
+        reg = getattr(p.obj, "register_api", None)
+        if not p.ok or reg is None:
+            continue
+        try:
+            reg(flask_app)
+        except Exception as e:  # noqa: BLE001
+            print(f"[plugin:{p.name}] register_api failed: {e}")
+
+
+_mount_plugins(app)
