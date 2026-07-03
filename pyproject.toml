@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "apt-hub"
+description = "APT — local AI, sorted. Scans your hardware, recommends models that fit, benchmarks real tok/s, and manages local LLMs via Ollama."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dynamic = ["version"]
+dependencies = [
+    "flask>=3.0",
+    "textual>=8.0",
+    "rich>=13.0",
+    "pydantic>=2.0",
+    "pyyaml>=6.0",
+    "pyperclip>=1.8",
+    "openai>=1.0",
+    "anthropic>=0.20",
+    "mcp>=1.0",
+    "apispec>=6.0",
+    "packaging>=24.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/Dkrynen/model-hub"
+Releases = "https://github.com/Dkrynen/model-hub/releases"
+
+[project.scripts]
+# `aptm` everywhere — never literally `apt` on POSIX (Debian/Ubuntu collision).
+# The Windows installer may add an `apt` alias; pipx installs stay collision-free.
+aptm = "cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "backend.version.__version__" }
+
+[tool.setuptools]
+py-modules = ["cli", "server"]
+
+[tool.setuptools.packages.find]
+include = ["backend*"]
+
+[tool.setuptools.package-data]
+"backend.cookbook" = ["data/*.json"]
