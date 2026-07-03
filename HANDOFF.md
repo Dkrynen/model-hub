@@ -48,32 +48,31 @@ I'm working on **Apt** — a local LLM manager (hardware scan → model recommen
 - Supports `--list` (show history), `--export CSV|JSON|JSONL`, `--prompt`, `--num-predict`, `--temperature`, `--no-cache`.
 - 5 tests for benchmark logging + CLI help.
 
-## Remaining / blocked
+## Current state (2026-07-03)
 
-### D1 — Model pull + benchmark (requires user action)
-Models are NOT pulled yet — user will pull manually. Instructions:
-```powershell
-# Pull qwen3:30b-a3b at all available quants
-ollama pull qwen3:30b-a3b
-ollama pull qwen3:30b-a3b:q4_K_M
-ollama pull qwen3:30b-a3b:q8_0
-ollama pull qwen3:30b-a3b:fp16
+**Everything below D2 is DONE and superseded by the v1 public-launch effort.**
+Spec: `docs/superpowers/specs/2026-07-02-apt-v1-public-launch-design.md` (open-core,
+cheap-subscription Pro via LemonSqueezy, Windows-first launch with teased macOS/Linux).
 
-# Pull Falcon3 1.58-bit
-ollama pull hf.co/tiiuae/Falcon3-3B-Instruct-1.58bit
+- **Calibration loop** — DONE + merged (measured > calibrated > estimated; per-machine
+  fingerprint; `apt benchmark` feeds it).
+- **Web technical controls** — DONE + merged to master (`ffca692`): calibration source
+  badges, expandable split-plan rows, per-GPU what-if toggles + RAM-spill switch,
+  browser benchmark launcher streaming `/api/benchmark`.
+- **Open-core plugin seam** — DONE + merged to master (`47dde65`): `apt.plugins`
+  entry-point discovery (`backend/plugins.py`), CLI + Flask mounting, `apt plugins`,
+  `GET /api/plugins`. See `docs/PLUGINS.md`. (TUI agent-tools moved to `apt.tools`.)
+- **apt-pro** — private repo `C:\Users\User\repos\apt-pro` (NEVER gets a public
+  remote): license-gate stub (`APT_PRO_DEV=1` / `~/.model-hub/license.json`,
+  `require()` exits 3), `apt pro status`, `apt pro tune <model> [--repeat N] [--apply]`
+  (offload sweep -> tune.jsonl, winner baked into `<model>-tuned` via /api/create).
 
-# Pull a comparable Q4 baseline for Falcon3
-ollama pull falcon3:3b
-
-# Benchmark each
-cd C:\Users\User\repos\model-hub
-.venv\Scripts\python.exe cli.py benchmark qwen3:30b-a3b
-.venv\Scripts\python.exe cli.py benchmark qwen3:30b-a3b:q4_K_M
-.venv\Scripts\python.exe cli.py benchmark qwen3:30b-a3b:q8_0
-.venv\Scripts\python.exe cli.py benchmark qwen3:30b-a3b:fp16
-.venv\Scripts\python.exe cli.py benchmark hf.co/tiiuae/Falcon3-3B-Instruct-1.58bit
-.venv\Scripts\python.exe cli.py benchmark falcon3:3b
-```
+### Remaining
+- Live smoke of `apt pro tune llama3.2:3b --repeat 1` with Ollama up (mocked suite green;
+  license gate + CLI discovery proven live).
+- **Plan 2** — LemonSqueezy licensing (replace license.py internals; `apt pro activate`),
+  calibration insights. **Plan 3** — release engineering (CI matrix, installers, rebrand,
+  secrets sweep, landing page + waitlist).
 
 ### C — Partial conditional activation (not started)
 MoE expert pruning, early exit, speculative decoding, dynamic quant — all still research. No code written.
