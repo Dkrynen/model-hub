@@ -319,10 +319,10 @@ function SourceBadge({ source, band }: { source: "measured" | "calibrated" | "es
   const meta = SOURCE_META[source];
   const tip =
     source === "measured"
-      ? "Real tok/s from your benchmarks"
+      ? "Real tok/s — auto-benchmarked by LAC Pro on your exact hardware"
       : source === "calibrated"
       ? `Adjusted by your machine's regime factor (±${Math.round(band)}%)`
-      : `Theoretical estimate (±${Math.round(band)}%)`;
+      : `Theoretical estimate (±${Math.round(band)}%). LAC Pro auto-benchmarks every model you install for measured accuracy.`;
   return (
     <Badge variant={meta.variant} dot title={tip}>
       {meta.label}
