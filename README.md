@@ -2,7 +2,7 @@
 
 # LAC — local AI, sorted.
 
-**Scans your hardware. Recommends models that actually fit. Benchmarks real tok/s — not guesses.**
+**Scans your hardware. Recommends models that actually fit. LAC Pro benchmarks and auto-tunes every one you install.**
 
 LAC is a local-LLM manager built around one question: *what's the best model this machine can actually run?* It scans your GPU/VRAM/RAM/CPU, ranks models against your real hardware (including multi-GPU and RAM-spill split plans), installs them via [Ollama](https://ollama.com), and then — this is the part nobody else does — **calibrates its own predictions against real benchmarks of your rig**, so recommendations get more accurate the more you use it.
 
@@ -12,10 +12,9 @@ LAC is a local-LLM manager built around one question: *what's the best model thi
 
 - **Hardware scan** — GPU, VRAM, RAM, CPU on Windows, Linux, macOS (NVIDIA, AMD, Apple Silicon, Intel)
 - **Fit-aware recommendations** — 91-model curated catalog scored by quality, speed, hardware fit, and context; multi-GPU tiering (dGPU → iGPU → RAM) with per-model split plans
-- **Real-speed calibration** — `lac benchmark` measures actual tok/s and feeds a per-machine calibration loop; recs are tagged `measured` / `calibrated` / `estimated` with confidence bands
+- **Real-speed calibration** — recs are tagged `measured` / `calibrated` / `estimated` with confidence bands; LAC Pro's autopilot feeds the `measured` tier automatically on every install
 - **What-if controls** — toggle GPUs on/off, allow/deny RAM spill, and watch the recommendations recompute live in the web UI
 - **Model management + chat** — install, run, delete; streaming chat with session persistence; full TUI
-- **Benchmark from the browser** — one dialog, live per-run tok/s, recommendations recalibrate on completion
 
 ## Install
 
@@ -30,7 +29,7 @@ Download the latest `LAC-Setup-x.x.x.exe` from [Releases](https://github.com/Dkr
 pipx install git+https://github.com/Dkrynen/lac
 lac scan          # what am I working with?
 lac recommend     # what should I run on it?
-lac benchmark llama3.2:3b   # real tok/s -> calibrates future recs
+lac pull llama3.2:3b        # installs it -- LAC Pro (if licensed) auto-tunes it for your rig
 lac chat          # TUI chat
 ```
 
@@ -42,7 +41,8 @@ Coming soon — **[join the waitlist](https://dkrynen.github.io/lac/)** and each
 
 The free tier is complete and stays free. **LAC Pro** adds the power tools:
 
-- **`lac pro tune <model>`** — sweeps GPU-offload configurations (auto / all layers / 75% / 50%), benchmarks each on *your* hardware, and bakes the fastest into a ready-to-use `<model>-tuned` variant
+- **Autopilot** — every model you install is automatically benchmarked, GPU-offload swept, and tuned to your exact rig, with zero commands
+- **`lac pro tune <model>` / `lac pro benchmark <model>`** — manual on-demand re-runs of the same sweep and benchmark steps autopilot uses
 - **Offload controls** — per-model layer splits, iGPU control, context presets
 - **Insights** — calibration history and regression detection ("your tok/s dropped 12% since that driver update")
 
