@@ -7,7 +7,7 @@ def test_index_serves_html(flask_app):
     client = flask_app.test_client()
     r = client.get("/")
     assert r.status_code == 200
-    assert b"Apt" in r.data or b"apt" in r.data
+    assert b"LAC" in r.data or b"lac" in r.data
 
 
 def test_docs_route(flask_app):

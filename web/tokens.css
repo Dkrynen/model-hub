@@ -1,39 +1,44 @@
-/* Apt — Design Tokens
-   Dark-first. Consumed by the web app (Tailwind + shadcn) and mirrored in the
-   TUI/CLI where possible. Keep these as the single source of truth. */
+/* LAC — Undergrowth design tokens
+   Dark-first. Near-black canvas + one green accent ("your machine, mapped").
+   Consumed by the web app (Tailwind + shadcn); mirrored in src/index.css and,
+   Python-side, in backend/brand.py. Keep these as the single source of truth.
+
+   Accent discipline: green appears only where the instrument speaks —
+   primary actions, focus rings, live/measured numbers, deep-dive affordances,
+   the TUI prompt/cursor. Never decoration, never large fills. */
 
 :root,
 [data-theme="dark"] {
-  /* Neutral */
-  --bg: #09090B;
-  --surface: #0F0F13;
-  --surface-2: #15151A;
-  --surface-3: #1B1B22;
-  --overlay: rgba(4, 4, 7, 0.60);
+  /* Neutral — near-black */
+  --bg: #08090A;
+  --surface: #0F1210;
+  --surface-2: #141917;
+  --surface-3: #1B211D;
+  --overlay: rgba(4, 5, 4, 0.60);
 
-  --border: rgba(255, 255, 255, 0.08);
-  --border-strong: rgba(255, 255, 255, 0.14);
+  --border: rgba(228, 232, 226, 0.08);
+  --border-strong: rgba(228, 232, 226, 0.14);
 
-  --text: #ECECEE;
-  --text-muted: #A1A1AA;
-  --text-faint: #71717A;
+  --text: #E4E8E2;
+  --text-muted: #7C8981;
+  --text-faint: #545C55;
 
-  /* Accent — Iris */
-  --accent: #6E7BF2;
-  --accent-hover: #8B96F5;
-  --accent-pressed: #5A67E0;
-  --accent-soft: rgba(110, 123, 242, 0.14);
-  --accent-fg: #FFFFFF;
+  /* Accent — Green (the one accent) */
+  --accent: #4ADE80;
+  --accent-hover: #6AEB9C;
+  --accent-pressed: #34C06A;
+  --accent-soft: rgba(74, 222, 128, 0.13);
+  --accent-fg: #06170D;
 
-  /* Semantic */
-  --success: #3DD68C;
-  --success-soft: rgba(61, 214, 140, 0.14);
-  --warning: #F5A524;
-  --warning-soft: rgba(245, 165, 36, 0.16);
-  --danger: #F6465D;
-  --danger-soft: rgba(246, 70, 93, 0.14);
-  --info: #38BDF8;
-  --info-soft: rgba(56, 189, 248, 0.14);
+  /* Semantic — success is teal, deliberately not the accent green */
+  --success: #2DD4BF;
+  --success-soft: rgba(45, 212, 191, 0.14);
+  --warning: #D9A84C;
+  --warning-soft: rgba(217, 168, 76, 0.16);
+  --danger: #E5484D;
+  --danger-soft: rgba(229, 72, 77, 0.14);
+  --info: #6FA8D8;
+  --info-soft: rgba(111, 168, 216, 0.14);
 
   /* Radius */
   --radius-sm: 6px;
@@ -59,34 +64,35 @@
 }
 
 [data-theme="light"] {
-  --bg: #FAFAFA;
+  /* Neutral — soft green-tinted paper */
+  --bg: #F6F8F4;
   --surface: #FFFFFF;
-  --surface-2: #F4F4F5;
-  --surface-3: #E9E9EC;
-  --overlay: rgba(15, 15, 20, 0.45);
+  --surface-2: #ECF2EA;
+  --surface-3: #E0E8DE;
+  --overlay: rgba(8, 14, 10, 0.45);
 
-  --border: rgba(0, 0, 0, 0.08);
-  --border-strong: rgba(0, 0, 0, 0.14);
+  --border: rgba(20, 40, 24, 0.10);
+  --border-strong: rgba(20, 40, 24, 0.18);
 
-  --text: #18181B;
-  --text-muted: #52525B;
-  --text-faint: #8A8A93;
+  --text: #12201A;
+  --text-muted: #55635B;
+  --text-faint: #8A968C;
 
-  /* Iris stays; slightly deepen for contrast on white */
-  --accent: #5A67E0;
-  --accent-hover: #6E7BF2;
-  --accent-pressed: #4F52D6;
-  --accent-soft: rgba(90, 103, 224, 0.12);
-  --accent-fg: #FFFFFF;
+  /* Green deepened for contrast on paper */
+  --accent: #1FA157;
+  --accent-hover: #4ADE80;
+  --accent-pressed: #178049;
+  --accent-soft: rgba(31, 161, 87, 0.12);
+  --accent-fg: #06170D;
 
-  --success: #1FAE6A;
-  --success-soft: rgba(31, 174, 106, 0.12);
-  --warning: #D98324;
-  --warning-soft: rgba(217, 131, 36, 0.14);
-  --danger: #E11D48;
-  --danger-soft: rgba(225, 29, 72, 0.12);
-  --info: #0EA5E9;
-  --info-soft: rgba(14, 165, 233, 0.12);
+  --success: #12876F;
+  --success-soft: rgba(18, 135, 111, 0.12);
+  --warning: #B27A26;
+  --warning-soft: rgba(178, 122, 38, 0.14);
+  --danger: #D93840;
+  --danger-soft: rgba(217, 56, 64, 0.12);
+  --info: #3E7A9C;
+  --info-soft: rgba(62, 122, 156, 0.12);
 
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
