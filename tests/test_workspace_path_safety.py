@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from backend.cookbook.config import (
@@ -41,6 +43,36 @@ def test_delete_workspace_still_works_for_real_workspace(isolated_home):
     ws = create_workspace("Scratch")
     assert delete_workspace(ws.id) is True
     assert not (_workspaces_dir() / ws.id).exists()
+
+
+def test_create_workspace_reserved_device_name_raises_value_error(isolated_home, monkeypatch):
+    # "con" (and nul/aux/prn/com1-9/lpt1-9) passes the path-traversal guard
+    # cleanly -- it's not an escape attempt -- but Win32 refuses to create
+    # a directory with a reserved device name, so Path.mkdir() raises
+    # OSError, not ValueError. That must surface as ValueError so the
+    # existing api.py/cli.py call sites (which only catch ValueError)
+    # reject it cleanly instead of an unhandled 500/traceback.
+    #
+    # Whether Path.mkdir() actually raises for "con" depends on the host's
+    # LongPathsEnabled registry setting (when enabled, Windows routes
+    # through the extended-length path API and the reserved-name check is
+    # bypassed) -- so simulate the OSError mkdir raises on a stock Windows
+    # box to deterministically verify the translation regardless of the
+    # test machine's config.
+    real_mkdir = Path.mkdir
+
+    def mkdir_reserved_name_fails(self, *args, **kwargs):
+        if self.name == "con":
+            raise OSError(
+                "[WinError 123] The filename, directory name, or volume "
+                "label syntax is incorrect: 'con'"
+            )
+        return real_mkdir(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", mkdir_reserved_name_fails)
+
+    with pytest.raises(ValueError):
+        create_workspace("con")
 
 
 def test_api_create_workspace_traversal_returns_400(flask_app, isolated_home):

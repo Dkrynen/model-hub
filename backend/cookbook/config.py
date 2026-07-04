@@ -147,7 +147,17 @@ def create_workspace(name: str, description: str = "") -> Workspace:
     import time
     ws_id = name.lower().replace(" ", "-").replace("_", "-")
     ws_dir = _resolve_within_workspaces(ws_id)
-    ws_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        ws_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        # Windows refuses to create directories named after reserved device
+        # names (con, nul, aux, prn, com1-9, lpt1-9) even though they pass
+        # the path-traversal guard above -- mkdir() raises OSError, not
+        # ValueError. Re-raise as ValueError so both call sites (api.py's
+        # api_create_workspace() and cli.py's create-workspace handler),
+        # which already catch ValueError from _resolve_within_workspaces,
+        # reject this cleanly instead of surfacing an unhandled 500/traceback.
+        raise ValueError(f"Could not create workspace directory: {e}")
     now = time.time()
     meta = ws_dir / "workspace.json"
     meta.write_text(json.dumps({
