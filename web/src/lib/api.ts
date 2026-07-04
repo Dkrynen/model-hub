@@ -117,4 +117,11 @@ export const api = {
   chat(model: string, messages: { role: string; content: string }[], signal?: AbortSignal) {
     return sse("/api/ollama/chat", { model, messages }, signal);
   },
+  /** Poll LAC Pro's autopilot status for a just-installed model. */
+  proOptimizeStatus: (model: string) =>
+    getJSON<{ state: "idle" | "running" | "done" | "failed_silent" | "not_licensed"; tokens_per_second?: number }>(
+      `/api/pro/optimize-status?model=${encodeURIComponent(model)}`
+    ),
+  /** List installed plugins (e.g. to check whether "pro" is present/licensed). */
+  plugins: () => getJSON<{ name: string; version: string; ok: boolean; error: string | null }[]>("/api/plugins"),
 };
