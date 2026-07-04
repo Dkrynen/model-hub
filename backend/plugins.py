@@ -1,6 +1,6 @@
 """Open-core plugin seam.
 
-Plugins are Python packages exposing an entry point in the ``apt.plugins``
+Plugins are Python packages exposing an entry point in the ``lac.plugins``
 group. The entry point resolves to a plugin object with:
 
 - ``name: str``            display name (falls back to the entry-point name)
@@ -16,7 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from importlib.metadata import entry_points
 
-GROUP = "apt.plugins"
+GROUP = "lac.plugins"
 
 
 def _entry_points():

@@ -103,12 +103,12 @@ class PluginManager:
             eps = importlib.metadata.entry_points()
         except Exception:
             return out
-        # "apt.tools" = TUI agent-tool plugins. The "apt.plugins" group belongs to
+        # "lac.tools" = TUI agent-tool plugins. The "lac.plugins" group belongs to
         # the app-level open-core seam (backend/plugins.py) — a different contract.
         try:
-            group = eps.select(group="apt.tools")
+            group = eps.select(group="lac.tools")
         except Exception:
-            group = [e for e in eps if e.group == "apt.tools"] if hasattr(eps, "__iter__") else []
+            group = [e for e in eps if e.group == "lac.tools"] if hasattr(eps, "__iter__") else []
         for ep in group:
             out.append(
                 PluginManifest(
