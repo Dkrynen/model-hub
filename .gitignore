@@ -22,3 +22,7 @@ credentials.json
 token.json
 license.json
 .superpowers/
+
+# stale generated artifacts, regenerate via cli.py openapi if needed
+/openapi.json
+apt_sdk/

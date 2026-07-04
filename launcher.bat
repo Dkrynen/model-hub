@@ -1,6 +1,6 @@
 @echo off
-title Apt
-echo Starting Apt...
+title LAC
+echo Starting LAC...
 
 set PYTHON=C:\Users\User\AppData\Local\Python\bin\python.exe
 set SCRIPT_DIR=%~dp0
