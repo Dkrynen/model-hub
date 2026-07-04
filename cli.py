@@ -1187,7 +1187,7 @@ def build_parser():
     p_simport = p_session_sub.add_parser("import", help="Import a session")
     p_simport.add_argument("path", help="Path to session json/yaml")
 
-    p_update = sub.add_parser("update", help="Check for or apply Apt updates")
+    p_update = sub.add_parser("update", help="Check for or apply LAC updates")
     p_update.add_argument("action", nargs="?", choices=["check", "install"], default="check", help="check or install")
     p_update.add_argument("--mode", choices=["enable", "disable", "check-only"], help="Override update mode")
 

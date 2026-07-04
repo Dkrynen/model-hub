@@ -434,7 +434,7 @@ def api_version():
         "version": APP_VERSION,
         "github_url": __github_url__,
         "download_url": __download_url__,
-        "app_name": "Apt",
+        "app_name": "LAC",
     })
 
 
@@ -882,7 +882,7 @@ def spa_fallback(_e):
 
 
 def run_server(host="127.0.0.1", port=5050, debug=False):
-    print(f"  Apt running at http://{host}:{port}")
+    print(f"  LAC running at http://{host}:{port}")
     print(f"  Open your browser to that address.\n")
     # Pre-warm the library cache in the background so Browse loads instantly.
     threading.Thread(target=_fetch_library, daemon=True).start()
