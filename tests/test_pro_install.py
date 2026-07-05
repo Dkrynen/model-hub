@@ -225,7 +225,7 @@ def test_explicit_gate_url_beats_env(plugin_dir, monkeypatch):
     assert seen[0][0] == "https://param.test/d"
 
 
-def test_default_gate_url_is_placeholder_constant(plugin_dir, monkeypatch):
+def test_default_gate_url_is_the_module_constant(plugin_dir, monkeypatch):
     monkeypatch.delenv("LAC_PRO_GATE_URL", raising=False)
     seen: list = []
     pro_install.install_pro_plugin("K", http_post=_fake_post(200, _artifact(), seen))

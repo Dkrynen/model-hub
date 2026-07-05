@@ -39,9 +39,9 @@ from pathlib import Path
 #: ``sys.path`` before discovery. Tests patch this module attribute.
 PLUGIN_DIR = Path.home() / ".model-hub" / "plugins"
 
-#: Placeholder until the gate's Duan-gated deploy pins the real subdomain.
+#: The live LAC Pro delivery gate (Cloudflare Worker, deployed 2026-07-05).
 #: Override at runtime with the ``LAC_PRO_GATE_URL`` env var (read per call).
-PRO_GATE_URL = "https://lac-pro-gate.PLACEHOLDER-set-at-deploy.workers.dev/pro/download"
+PRO_GATE_URL = "https://lac-pro-gate.refersal.workers.dev/pro/download"
 
 GATE_TIMEOUT_S = 60
 
