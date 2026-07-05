@@ -1,0 +1,30 @@
+# LAC Pro delivery gate — stateless free-tier Cloudflare Worker.
+# Validates a Polar license key, then streams the compiled Pro artifact
+# from a private R2 bucket. No KV, no D1, no Durable Objects, no logging of
+# the key — nothing here costs money beyond Workers/R2 free tier.
+#
+# This file lives in the OPEN-SOURCE repo. It contains ZERO secrets:
+#   - POLAR_ORG_ID is public (it already ships in the LAC client).
+#   - The artifact bytes live in R2 (private), never in this repo.
+#
+# Deploy is Duan-gated (needs the Cloudflare account) — see README.md.
+
+name = "lac-pro-gate"
+main = "src/index.ts"
+compatibility_date = "2024-11-01"
+
+[vars]
+# Public Polar.sh organization UUID — safe to commit (already in the client).
+POLAR_ORG_ID = "c3771fa4-19b0-4f29-a444-0aa52b0daf36"
+# R2 object key of the artifact to stream. Chosen at upload time by Duan;
+# the placeholder below is fine — nothing hard-couples to the filename.
+ARTIFACT_KEY = "lac-pro-latest.zip"
+# Filename offered to the client in the Content-Disposition header.
+ARTIFACT_FILENAME = "lac-pro.zip"
+
+# Private R2 bucket holding the compiled Pro artifact. In tests this binding
+# is emulated locally (no real bucket touched). For deploy, create the bucket
+# and keep this binding name — see README.md.
+[[r2_buckets]]
+binding = "R2_BUCKET"
+bucket_name = "lac-pro-artifacts"

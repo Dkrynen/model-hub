@@ -1,0 +1,16 @@
+{
+  "name": "lac-pro-gate",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Stateless Cloudflare Worker gate for LAC Pro artifact delivery — validate a Polar license key, stream the compiled Pro artifact from R2.",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "deploy": "npx wrangler deploy"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260702.1",
+    "vitest": "^4.1.9"
+  }
+}

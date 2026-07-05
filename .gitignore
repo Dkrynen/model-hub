@@ -26,3 +26,7 @@ license.json
 # stale generated artifacts, regenerate via cli.py openapi if needed
 /openapi.json
 apt_sdk/
+
+# Cloudflare Worker gate (worker/) — node deps + local wrangler state
+worker/node_modules/
+worker/.wrangler/
