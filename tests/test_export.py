@@ -120,9 +120,10 @@ def test_export_all_organizes_by_date(tmp_path):
     persistence.save_session(sid, model=s["model"], messages=s["messages"])
     written = export_all(tmp_path, "md", include_json=True)
     assert written
+    today = time.strftime("%Y-%m-%d", time.gmtime())
     day_dirs = [p for p in tmp_path.iterdir() if p.is_dir()]
-    assert any(d.name == "2026-07-01" for d in day_dirs)
-    md_files = list((tmp_dir_for(day_dirs, "2026-07-01")).glob("*.md"))
+    assert any(d.name == today for d in day_dirs)
+    md_files = list((tmp_dir_for(day_dirs, today)).glob("*.md"))
     assert md_files
 
 
