@@ -208,3 +208,63 @@ def test_switch_workspace_404_for_unknown_id(flask_app, isolated_home):
     client = flask_app.test_client()
     r = client.post("/api/workspaces/does-not-exist/switch")
     assert r.status_code == 404
+
+
+def test_ollama_status_reports_real_version(monkeypatch, flask_app):
+    from backend import api as api_mod
+
+    def fake_request(method, path, json_body=None, stream=False):
+        assert path == "/api/version"
+        return {"version": "0.31.1"}
+
+    monkeypatch.setattr(api_mod, "_ollama_request", fake_request)
+    client = flask_app.test_client()
+    r = client.get("/api/ollama/status")
+    assert r.status_code == 200
+    assert r.get_json() == {"running": True, "version": "0.31.1"}
+
+
+def test_ollama_pull_non_dict_body_does_not_500(flask_app):
+    r = flask_app.test_client().post("/api/ollama/pull", json=["a", "b"])
+    assert r.status_code == 400
+    assert r.get_json()["error"] == "No model specified"
+
+
+def test_ollama_delete_non_dict_body_does_not_500(flask_app):
+    r = flask_app.test_client().post(
+        "/api/ollama/delete", data="null", content_type="application/json"
+    )
+    assert r.status_code == 400
+    assert r.get_json()["error"] == "No model specified"
+
+
+def test_ollama_chat_non_dict_body_does_not_500(flask_app):
+    r = flask_app.test_client().post("/api/ollama/chat", json="not-a-dict")
+    assert r.status_code == 400
+    assert r.get_json()["error"] == "Model and messages required"
+
+
+def test_ollama_delete_reports_failure_when_ollama_errors(monkeypatch, flask_app):
+    from backend import api as api_mod
+
+    monkeypatch.setattr(
+        api_mod, "_ollama_request",
+        lambda method, path, json_body=None, stream=False: {"error": "model 'x' not found"},
+    )
+    r = flask_app.test_client().post("/api/ollama/delete", json={"model": "x"})
+    assert r.status_code == 500
+    assert r.get_json().get("success") is not True
+
+
+def test_malformed_json_returns_json_error_not_html(flask_app):
+    r = flask_app.test_client().put("/api/config", data="{not valid json", content_type="application/json")
+    assert r.status_code == 400
+    assert r.get_json() is not None
+    assert "error" in r.get_json()
+
+
+def test_method_not_allowed_returns_json_error_not_html(flask_app):
+    r = flask_app.test_client().post("/api/benchmark", json={"model": "m:1b"})
+    assert r.status_code == 405
+    assert r.get_json() is not None
+    assert "error" in r.get_json()

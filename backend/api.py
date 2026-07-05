@@ -214,7 +214,7 @@ def api_models():
 
 @app.route("/api/ollama/status")
 def ollama_status():
-    resp = _ollama_request("GET", "/api/tags")
+    resp = _ollama_request("GET", "/api/version")
     if resp is None or (isinstance(resp, dict) and "error" in resp):
         return jsonify({"running": False, "version": None, "error": resp.get("error") if isinstance(resp, dict) else None})
     return jsonify({
@@ -242,7 +242,9 @@ def ollama_models():
 
 @app.route("/api/ollama/pull", methods=["POST"])
 def ollama_pull():
-    data = request.get_json()
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        data = {}
     model_name = data.get("model", "")
     if not model_name:
         return jsonify({"error": "No model specified"}), 400
@@ -290,20 +292,24 @@ def ollama_pull():
 
 @app.route("/api/ollama/delete", methods=["POST"])
 def ollama_delete():
-    data = request.get_json()
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        data = {}
     model_name = data.get("model", "")
     if not model_name:
         return jsonify({"error": "No model specified"}), 400
 
     result = _ollama_request("DELETE", f"/api/delete", {"name": model_name})
-    if result is None:
-        return jsonify({"error": "Failed to delete model"}), 500
+    if isinstance(result, dict) and "error" in result:
+        return jsonify({"error": result["error"]}), 500
     return jsonify({"success": True})
 
 
 @app.route("/api/ollama/chat", methods=["POST"])
 def ollama_chat():
-    data = request.get_json()
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        data = {}
     model = data.get("model", "")
     messages = data.get("messages", [])
     if not model or not messages:
@@ -757,6 +763,20 @@ def spa_fallback(_e):
         "Web app not built. Run `npm run build` inside web/, or `npm run dev` for development.",
         404,
     )
+
+
+@app.errorhandler(400)
+def bad_request_json(e):
+    if request.path.startswith("/api/"):
+        return jsonify({"error": "Bad request"}), 400
+    return e
+
+
+@app.errorhandler(405)
+def method_not_allowed_json(e):
+    if request.path.startswith("/api/"):
+        return jsonify({"error": "Method not allowed"}), 405
+    return e
 
 
 def run_server(host="127.0.0.1", port=5050, debug=False):
