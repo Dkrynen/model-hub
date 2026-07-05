@@ -279,6 +279,22 @@ def _tier_bandwidth(tier) -> float:
     return {"cuda": 220, "rocm": 180, "metal": 150, "vulkan": 120}.get(tier.backend, 100)
 
 
+def _tier_capacity(tier, igpu_claim_gb: float) -> float:
+    """Usable capacity for one compute tier, after headroom.
+
+    An integrated GPU draws its VRAM from the same physical RAM pool as
+    the "ram" tier. Subtract the iGPU's claim from RAM's own ceiling
+    BEFORE applying RAM's headroom, so the two shared-memory tiers can't
+    both spend the same physical bytes (was: an iGPU claiming ~9.45GB plus
+    RAM's 50% headroom could together spend ~80% of physical RAM, not the
+    intended 50%).
+    """
+    memory_gb = tier.memory_gb
+    if tier.kind == "ram" and igpu_claim_gb > 0:
+        memory_gb = max(0.0, memory_gb - igpu_claim_gb)
+    return memory_gb * TIER_HEADROOM.get(tier.kind, 0.75)
+
+
 def _compute_split_plan(vram_needed: float, info: SystemInfo,
                         model: ModelEntry) -> Optional[SplitPlan]:
     """Distribute a model's memory across compute tiers (dGPU → iGPU → RAM).
@@ -304,10 +320,12 @@ def _compute_split_plan(vram_needed: float, info: SystemInfo,
     allocs: list[TierAllocation] = []
     used_kinds: set[str] = set()
 
+    igpu_claim_gb = sum(t.memory_gb for t in tiers if t.kind == "integrated")
+
     for tier in tiers:
         if remaining <= 0.01:
             break
-        capacity = tier.memory_gb * TIER_HEADROOM.get(tier.kind, 0.75)
+        capacity = _tier_capacity(tier, igpu_claim_gb)
         allocated = min(remaining, capacity)
         if allocated > 0.01:
             allocs.append(TierAllocation(
@@ -319,7 +337,7 @@ def _compute_split_plan(vram_needed: float, info: SystemInfo,
             used_kinds.add(tier.kind)
 
     # Doesn't fit even with all tiers (allow small tolerance for rounding).
-    total_capacity = sum(t.memory_gb * TIER_HEADROOM.get(t.kind, 0.75) for t in tiers)
+    total_capacity = sum(_tier_capacity(t, igpu_claim_gb) for t in tiers)
     if vram_needed > total_capacity + 0.5:
         return None
 

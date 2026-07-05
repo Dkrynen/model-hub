@@ -506,3 +506,17 @@ def test_cli_recommend_help_advertises_no_calibration_flag():
     )
     assert r.returncode == 0
     assert "--no-calibration" in r.stdout
+
+
+def test_ram_tier_capacity_subtracts_igpu_shared_claim():
+    """The iGPU shares the same physical RAM pool as the 'ram' tier -- its
+    claimed VRAM must be subtracted from RAM's own ceiling before applying
+    the 50% headroom, so the two tiers can't double-spend the same bytes.
+    On the real hand-off rig (dGPU 16GB + iGPU 10.5GB + RAM 30.9GB): old
+    (buggy) combined ceiling = 16 + 9.45 + 30.9*0.5 = 40.9GB; corrected
+    ceiling = 16 + 9.45 + (30.9-10.5)*0.5 = 35.65GB. 38GB fits under the
+    old (double-counting) ceiling but must now report too_big."""
+    info = _sys_handoff()
+    model = next(m for m in load_models() if m.id == "qwen3:32b")
+    split = _compute_split_plan(38.0, info, model)
+    assert split is None

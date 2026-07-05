@@ -135,6 +135,11 @@ def api_recommend():
         if not info.gpus:
             from .cookbook.hardware import GPUInfo
             info.gpus = [GPUInfo(name=f"Manual ({vram} GB)", vram_gb=vram, backend="cuda")]
+        # Manual override updates fit-scoring via total_vram_gb/gpus above,
+        # but combined_vram_gb is a separate display field detect() already
+        # computed pre-override -- keep it in sync or the UI shows a stale
+        # number next to the correctly-overridden one.
+        info.combined_vram_gb = round(sum(g.vram_gb for g in info.gpus), 1)
 
     mask = {int(x) for x in gpu_mask_raw.split(",") if x.strip().isdigit()} if gpu_mask_raw else set()
     if mask:

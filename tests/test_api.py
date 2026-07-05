@@ -268,3 +268,20 @@ def test_method_not_allowed_returns_json_error_not_html(flask_app):
     assert r.status_code == 405
     assert r.get_json() is not None
     assert "error" in r.get_json()
+
+
+def test_recommend_manual_vram_override_updates_combined_vram(monkeypatch, flask_app, isolated_home):
+    from backend import api as api_mod
+    from backend.cookbook.hardware import SystemInfo
+
+    monkeypatch.setattr(api_mod, "detect", lambda: SystemInfo(
+        os="Test", cpu="Test", cpu_cores=8, ram_gb=32.0,
+        gpus=[], total_vram_gb=0.0, combined_vram_gb=0.0, compute_tiers=[],
+    ))
+
+    client = flask_app.test_client()
+    r = client.get("/api/recommend?use_case=general&top_k=3&vram=8")
+    assert r.status_code == 200
+    data = r.get_json()
+    assert data["vram_gb"] == 8.0
+    assert data["combined_vram_gb"] == 8.0
