@@ -30,3 +30,7 @@ apt_sdk/
 # Cloudflare Worker gate (worker/) — node deps + local wrangler state
 worker/node_modules/
 worker/.wrangler/
+
+# Downloaded Pro artifacts — NEVER commit (they belong in private R2, not the public repo)
+lac-pro*.zip
+worker/*.zip
