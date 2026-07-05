@@ -1,5 +1,5 @@
-import { Download as DownloadIcon, Clock, CheckCircle2, XCircle } from "lucide-react";
-import { PageHeader, EmptyState } from "@/components/page";
+import { Download as DownloadIcon, Clock } from "lucide-react";
+import { PageHeader, EmptyState, ErrorState } from "@/components/page";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -15,7 +15,7 @@ export function Downloads() {
       <PageHeader title="Downloads" subtitle="History of models pulled through LAC." />
 
       {dl.error ? (
-        <EmptyState title="No download history yet" hint="Pulled models will show up here." />
+        <ErrorState message={`Couldn't load download history: ${dl.error}`} onRetry={dl.reload} />
       ) : dl.loading ? (
         <Card className="p-3">
           {Array.from({ length: 3 }).map((_, i) => (
@@ -26,7 +26,7 @@ export function Downloads() {
         <EmptyState
           icon={<DownloadIcon className="h-8 w-8" />}
           title="No downloads yet"
-          hint="Install a model from Browse or the Dashboard and it’ll appear here."
+          hint="Install a model from Browse or the Dashboard and it'll appear here."
         />
       ) : (
         <div className="overflow-hidden rounded-lg border border-line">
