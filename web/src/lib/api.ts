@@ -133,4 +133,12 @@ export const api = {
     getJSON<{ state: string; error_type?: string; message?: string; model_name?: string; quant?: string }>(
       `/api/pro/import-status?repo_id=${encodeURIComponent(repoId)}`
     ),
+  /** Activate LAC Pro: send a license key → the core route bootstrap-installs the
+   *  plugin. Returns the installer's honest result (200 for both outcomes; the
+   *  frontend branches on `state`). */
+  unlockPro: (key: string) =>
+    postJSON<
+      | { state: "installed"; path: string }
+      | { state: "failed"; error_type: string; message: string }
+    >("/api/pro/unlock", { key }),
 };

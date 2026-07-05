@@ -13,6 +13,7 @@ from flask import Flask, Response, jsonify, request, stream_with_context
 
 from .cookbook.hardware import detect, print_system
 from .cookbook.recommend import recommend, load_models
+from .pro_install import install_pro_plugin
 
 try:
     from .version import __version__ as APP_VERSION, __github_url__, __download_url__
@@ -754,6 +755,27 @@ def api_delete_session(session_id):
     from .cookbook.persistence import delete_session
     delete_session(session_id)
     return jsonify({"success": True})
+
+
+@app.route("/api/pro/unlock", methods=["POST"])
+def api_pro_unlock():
+    """Activate LAC Pro from the browser — the twin of `lac unlock <key>`.
+
+    Hand the license key to install_pro_plugin (which fetches the licensed
+    plugin from the delivery gate and installs it) and return its honest dict
+    verbatim. That helper NEVER raises: a failed install is reported in the
+    body as {"state":"failed","error_type","message"} at HTTP 200 — the
+    frontend branches on `state`. A 400 is reserved for a malformed request
+    body only (missing or non-string key), matching the guard idiom used by
+    the other POST routes in this file.
+    """
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        data = {}
+    key = data.get("key")
+    if not isinstance(key, str) or not key.strip():
+        return jsonify({"error": "License key required"}), 400
+    return jsonify(install_pro_plugin(key.strip()))
 
 
 @app.errorhandler(404)

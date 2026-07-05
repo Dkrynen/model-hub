@@ -309,3 +309,79 @@ def test_check_update_uses_lac_repo_and_useragent(monkeypatch, flask_app):
     assert captured["url"] == "https://api.github.com/repos/Dkrynen/lac/releases/latest"
     assert captured["ua"].startswith("LAC/")
     assert captured["ua"] != "model-hub/1.0"
+
+
+# --- POST /api/pro/unlock (web "Activate Pro" -> bootstrap-install the plugin) ---
+# The route is the browser twin of `lac unlock`: it hands the license key to
+# install_pro_plugin (which NEVER raises) and returns that helper's honest dict
+# verbatim at HTTP 200 -- the frontend branches on `state`. A 400 is reserved
+# strictly for a malformed request body (missing / non-string key).
+
+
+def test_pro_unlock_installed_returns_200_with_body(monkeypatch, flask_app):
+    """A successful bootstrap returns install_pro_plugin's dict verbatim at 200,
+    and the submitted key is threaded through to the helper."""
+    from backend import api as api_mod
+
+    captured = {}
+
+    def fake_install(key, **kwargs):
+        captured["key"] = key
+        return {"state": "installed", "path": "/home/u/.model-hub/plugins"}
+
+    monkeypatch.setattr(api_mod, "install_pro_plugin", fake_install)
+    r = flask_app.test_client().post("/api/pro/unlock", json={"key": "LAC-PRO-123"})
+    assert r.status_code == 200
+    assert r.get_json() == {"state": "installed", "path": "/home/u/.model-hub/plugins"}
+    assert captured["key"] == "LAC-PRO-123"
+
+
+def test_pro_unlock_failed_returns_200_with_honest_body(monkeypatch, flask_app):
+    """A failed install is NOT an HTTP error: 200 with the honest failure body
+    (state/error_type/message) so the UI can surface the real message."""
+    from backend import api as api_mod
+
+    failure = {
+        "state": "failed",
+        "error_type": "invalid_key",
+        "message": "Your license key was not accepted (invalid or expired).",
+    }
+    monkeypatch.setattr(api_mod, "install_pro_plugin", lambda key, **kw: failure)
+    r = flask_app.test_client().post("/api/pro/unlock", json={"key": "bad-key"})
+    assert r.status_code == 200
+    assert r.get_json() == failure
+
+
+def test_pro_unlock_missing_key_returns_400(monkeypatch, flask_app):
+    """A body with no key is malformed -> 400, and the installer is never called."""
+    from backend import api as api_mod
+
+    called = {"n": 0}
+    monkeypatch.setattr(
+        api_mod, "install_pro_plugin",
+        lambda *a, **k: called.__setitem__("n", called["n"] + 1) or {"state": "installed"},
+    )
+    r = flask_app.test_client().post("/api/pro/unlock", json={})
+    assert r.status_code == 400
+    assert "error" in r.get_json()
+    assert called["n"] == 0
+
+
+def test_pro_unlock_non_string_key_returns_400(monkeypatch, flask_app):
+    """A non-string key is malformed -> 400 (never handed to the installer)."""
+    from backend import api as api_mod
+
+    monkeypatch.setattr(
+        api_mod, "install_pro_plugin",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("installer must not run")),
+    )
+    r = flask_app.test_client().post("/api/pro/unlock", json={"key": 123})
+    assert r.status_code == 400
+    assert "error" in r.get_json()
+
+
+def test_pro_unlock_non_dict_body_returns_400(flask_app):
+    """A non-dict JSON body is malformed -> 400 (mirrors the other POST guards)."""
+    r = flask_app.test_client().post("/api/pro/unlock", json=["not", "a", "dict"])
+    assert r.status_code == 400
+    assert "error" in r.get_json()
