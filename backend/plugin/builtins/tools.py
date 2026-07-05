@@ -76,7 +76,7 @@ def _web_search(args: dict, ctx: dict) -> str:
     if not query:
         return "error: no query"
     url = "https://html.duckduckgo.com/html/?q=" + urllib.parse.quote(query)
-    req = urllib.request.Request(url, headers={"User-Agent": "Apt/2.2"})
+    req = urllib.request.Request(url, headers={"User-Agent": "LAC/2.2.0"})
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
             html = resp.read().decode(errors="replace")

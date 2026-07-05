@@ -381,10 +381,10 @@ def api_check_update():
         import urllib.request
         import urllib.error
         import json as _json
-        url = "https://api.github.com/repos/Dkrynen/model-hub/releases/latest"
+        url = "https://api.github.com/repos/Dkrynen/lac/releases/latest"
         req = urllib.request.Request(url, method="GET")
         req.add_header("Accept", "application/json")
-        req.add_header("User-Agent", "model-hub/1.0")
+        req.add_header("User-Agent", f"LAC/{APP_VERSION}")
         resp = urllib.request.urlopen(req, timeout=5)
         data = _json.loads(resp.read().decode())
         latest = data.get("tag_name", "").lstrip("v")

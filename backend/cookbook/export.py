@@ -97,7 +97,7 @@ def to_markdown(session: dict) -> str:
         "messages": len(session.get("messages", [])),
     }
     lines = ["---", yaml.safe_dump(front, sort_keys=False, default_flow_style=False).strip(), "---", ""]
-    lines.append(f"# Apt Session: {sid[:10] if sid else 'unknown'}")
+    lines.append(f"# LAC Session: {sid[:10] if sid else 'unknown'}")
     lines.append("")
     lines.append(f"**Model:** {model or 'n/a'}  ")
     lines.append(f"**Created:** {_date_str(session.get('created_at'))}  ")
@@ -128,7 +128,7 @@ def _slug(text: str) -> str:
 
 def to_opencode_json(session: dict) -> str:
     sid = session.get("id", "") or _ulid()
-    title = session.get("name") or next((m.get("content", "")[:60] for m in session.get("messages", []) if m.get("role") == "user"), "Apt Session")
+    title = session.get("name") or next((m.get("content", "")[:60] for m in session.get("messages", []) if m.get("role") == "user"), "LAC Session")
     model = session.get("model", "")
     messages_out = []
     parent_id = None
@@ -195,7 +195,7 @@ def to_html(session: dict) -> str:
     msgs = "\n".join(rows)
     return f"""<!doctype html>
 <html><head><meta charset="utf-8">
-<title>Apt Session {html.escape(sid[:10])}</title>
+<title>LAC Session {html.escape(sid[:10])}</title>
 <style>
 body {{ background:#0f1117; color:#e1e4ec; font-family:system-ui,sans-serif; max-width:880px; margin:2rem auto; padding:0 1rem; }}
 h1 {{ color:#6c8cff; font-size:1.3rem; }}
@@ -210,7 +210,7 @@ h1 {{ color:#6c8cff; font-size:1.3rem; }}
 .body pre {{ white-space:pre-wrap; word-wrap:break-word; margin:0; font-family:ui-monospace,Consolas,monospace; font-size:.9rem; }}
 </style></head>
 <body>
-<h1>Apt Session</h1>
+<h1>LAC Session</h1>
 <div class="meta">id: {html.escape(sid)} &middot; model: {html.escape(model)} &middot; created: {html.escape(_date_str(session.get('created_at')))}</div>
 {msgs}
 </body></html>"""
@@ -235,7 +235,7 @@ def _filename(session: dict, fmt: str) -> str:
     sid = session.get("id", "session") or "session"
     short = sid[:10]
     ext = {"md": "md", "markdown": "md", "json": "json", "yaml": "yaml", "yml": "yaml", "html": "html", "opencode-json": "json"}[fmt.lower()]
-    return f"apt-session-{short}.{ext}"
+    return f"lac-session-{short}.{ext}"
 
 
 def export_session_file(session: dict, fmt: str, out_dir: str | Path | None = None, base: str | None = None) -> Path:

@@ -285,3 +285,27 @@ def test_recommend_manual_vram_override_updates_combined_vram(monkeypatch, flask
     data = r.get_json()
     assert data["vram_gb"] == 8.0
     assert data["combined_vram_gb"] == 8.0
+
+
+def test_check_update_uses_lac_repo_and_useragent(monkeypatch, flask_app):
+    import urllib.request as real_urllib_request
+
+    captured = {}
+
+    class FakeResp:
+        def read(self):
+            return b'{"tag_name": "v9.9.9", "html_url": "x", "body": ""}'
+
+    def fake_urlopen(req, timeout=5):
+        captured["url"] = req.full_url
+        captured["ua"] = req.get_header("User-agent")
+        return FakeResp()
+
+    monkeypatch.setattr(real_urllib_request, "urlopen", fake_urlopen)
+
+    client = flask_app.test_client()
+    r = client.get("/api/system/check-update?current=0.0.0")
+    assert r.status_code == 200
+    assert captured["url"] == "https://api.github.com/repos/Dkrynen/lac/releases/latest"
+    assert captured["ua"].startswith("LAC/")
+    assert captured["ua"] != "model-hub/1.0"

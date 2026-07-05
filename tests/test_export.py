@@ -7,6 +7,7 @@ from pathlib import Path
 import yaml
 
 from backend.cookbook.export import (
+    _filename,
     export_all,
     export_session,
     export_session_file,
@@ -14,6 +15,7 @@ from backend.cookbook.export import (
     to_html,
     to_json,
     to_markdown,
+    to_opencode_json,
     to_yaml,
 )
 
@@ -161,3 +163,30 @@ def test_import_then_persist(isolated_home, tmp_path):
     got = persistence.get_session(sid)
     assert got is not None
     assert len(got["messages"]) == 2
+
+
+def test_filename_uses_lac_session_prefix():
+    name = _filename({"id": "abc123def45678"}, "json")
+    assert name == "lac-session-abc123def4.json"
+    assert "apt-session" not in name
+
+
+def test_markdown_heading_is_lac_session():
+    md = to_markdown(_make_session())
+    assert "# LAC Session:" in md
+    assert "Apt Session" not in md
+
+
+def test_html_title_and_heading_are_lac_session():
+    h = to_html(_make_session())
+    assert "<title>LAC Session" in h
+    assert "<h1>LAC Session</h1>" in h
+    assert "Apt Session" not in h
+
+
+def test_opencode_json_default_title_is_lac_session():
+    s = _make_session()
+    s["name"] = ""
+    s["messages"] = [{"role": "assistant", "content": "hi", "timestamp": 1.0}]
+    out = json.loads(to_opencode_json(s))
+    assert out["info"]["title"] == "LAC Session"
