@@ -55,10 +55,6 @@ function Paragraph({ text }: { text: string }) {
   return <p>{inline(text)}</p>;
 }
 
-function escapeHtml(s: string) {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}
-
 /** Render inline markdown to React nodes (bold, italic, code, links). */
 function inline(text: string): React.ReactNode[] {
   const out: React.ReactNode[] = [];

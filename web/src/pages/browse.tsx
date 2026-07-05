@@ -12,7 +12,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { useAsync } from "@/lib/hooks";
 import { api } from "@/lib/api";
-import { verdictFromFit } from "@/components/verdict";
 import { pullWithToast } from "@/lib/installer";
 
 const CAPS = [
