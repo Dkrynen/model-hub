@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## 2.4.0 (2026-07-06)
+
+- **LAC Pro delivery & activation** — buy on Polar → receive the compiled Pro plugin through a license-gated download: `lac unlock <key>` (or **Settings → Activate Pro** in the web UI) installs it, then `lac pro activate <key>` licenses it. The Pro plugin is Nuitka-compiled and served from a private store only to validated license keys; the open-source core stays Pro-logic-unaware (generic licensed-plugin bootstrap, no `lac_pro` import). Hardening against casual bypass — honestly not DRM.
+- **Pro Autopilot** — every model you install is automatically benchmarked, GPU-offload swept, and tuned to your rig with zero commands; feeds the `measured` speed tier on every install.
+- **Custom model import (Pro)** — paste a Hugging Face repo ID and LAC downloads, architecture-checks, quantizes, and installs it via Ollama, then registers it as a full catalog citizen and benchmarks it.
 - **LAC rebrand** — renamed from APT to **LAC** (Local AI Companion): CLI command `lac`, PyPI dist `lac-ai`, Undergrowth visual identity (near-black + single green accent, vein-leaf mark) replaces the Iris palette across web, landing page, and TUI theme values; committed SVG/icon assets (`assets/`); installer/exe renamed to `LAC-Setup-x.x.x.exe` / `lac.exe`
 - **Real-speed calibration loop** — `lac benchmark` results (per-machine + software-stack fingerprint) now calibrate recommendations; recs tagged `measured`/`calibrated`/`estimated` with confidence bands
 - **Web technical controls** — calibration badges, expandable per-model split-plan rows, per-GPU on/off + RAM-spill what-if toggles, browser benchmark dialog with live tok/s streaming

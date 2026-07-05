@@ -19,7 +19,7 @@ OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
 try:
     from backend.version import __version__
 except Exception:
-    __version__ = "2.3.0"
+    __version__ = "2.4.0"
 
 
 def _llm(method, path, body=None, timeout=30):
