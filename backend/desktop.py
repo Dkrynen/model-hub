@@ -8,11 +8,17 @@ orphan servers cannot accumulate. Windows-only window; no-ops elsewhere.
 Non-goals (locked): no tray, no autostart, no in-window auto-update, no
 multi-window.
 """
+import json
+import os
 import sys
 import threading
 import time
 import urllib.request
 import webbrowser
+
+from backend import self_invoke
+from backend.cookbook import proc
+from backend.cookbook.config import resolve_under_data_root
 
 HOST = "127.0.0.1"
 PORT = 5050
@@ -156,3 +162,28 @@ def _fallback_to_browser(host: str, port: int, reason: str) -> int:
     except Exception:
         pass
     return 0
+
+
+WINDOW_STATE_PATH = resolve_under_data_root("window_state.json")
+
+
+def save_window_state(bounds: dict | None, view: str | None) -> None:
+    """Best-effort persist of window geometry + current view. Never raises."""
+    try:
+        WINDOW_STATE_PATH.write_text(json.dumps({"bounds": bounds or {}, "view": view or ""}))
+    except Exception:
+        pass
+
+
+def relaunch(view: str | None = None, bounds: dict | None = None) -> bool:
+    """Persist state, spawn a fresh window process, and exit this one so the
+    new process cold-boots and mounts Pro via the normal startup seam. Returns
+    False WITHOUT exiting if the spawn fails (grant is already on disk, so Pro
+    comes up on the next manual launch)."""
+    save_window_state(bounds, view)
+    try:
+        proc.popen(self_invoke.window_prefix())
+    except Exception:
+        return False
+    os._exit(0)
+    return True  # unreachable; keeps the declared return type honest

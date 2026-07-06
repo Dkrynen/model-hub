@@ -807,6 +807,25 @@ def api_pro_activate():
     return jsonify({"state": "activated"})
 
 
+@app.route("/api/app/relaunch", methods=["POST"])
+def api_app_relaunch():
+    """Self-relaunch the desktop window so a freshly-installed Pro plugin
+    mounts on a clean startup. desktop.relaunch() exits this process on
+    success (the response never reaches the client); on failure it returns
+    False without exiting, so we report a normal JSON body and the user can
+    restart LAC manually."""
+    from backend import desktop
+    data = request.get_json(silent=True)
+    data = data if isinstance(data, dict) else {}
+    view = data.get("view")
+    bounds = data.get("bounds")
+    ok = desktop.relaunch(view=view, bounds=bounds)
+    if not ok:
+        return jsonify({"state": "failed",
+                         "message": "Could not relaunch; please restart LAC manually."})
+    return jsonify({"state": "relaunching"})
+
+
 @app.errorhandler(404)
 def spa_fallback(_e):
     # Client-side routes (e.g. /browse, /chat) -> index.html; API 404 -> JSON.
