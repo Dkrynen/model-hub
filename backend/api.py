@@ -312,6 +312,31 @@ def ollama_delete():
     return jsonify({"success": True})
 
 
+def _warm_ollama(model: str) -> None:
+    """Load `model` into VRAM (no generation) and keep it resident. Never raises."""
+    import urllib.request
+    try:
+        body = json.dumps({"model": model, "keep_alive": "30m"}).encode()
+        req = urllib.request.Request(f"{OLLAMA_HOST}/api/generate", data=body,
+                                     headers={"Content-Type": "application/json"}, method="POST")
+        urllib.request.urlopen(req, timeout=120).read()
+    except Exception:
+        pass
+
+
+@app.route("/api/ollama/warm", methods=["POST"])
+def ollama_warm():
+    """Preload a model into VRAM off the chat critical path so the first message
+    doesn't pay the cold-load penalty. Fire-and-forget: returns immediately; the
+    load happens in a daemon thread."""
+    data = request.get_json(silent=True)
+    model = data.get("model") if isinstance(data, dict) else None
+    if not isinstance(model, str) or not model.strip():
+        return jsonify({"error": "model required"}), 400
+    threading.Thread(target=_warm_ollama, args=(model.strip(),), daemon=True).start()
+    return jsonify({"accepted": True}), 200
+
+
 @app.route("/api/ollama/chat", methods=["POST"])
 def ollama_chat():
     data = request.get_json(silent=True)
@@ -326,7 +351,7 @@ def ollama_chat():
         import urllib.request
         import urllib.error
         url = f"{OLLAMA_HOST}/api/chat"
-        body = json.dumps({"model": model, "messages": messages, "stream": True}).encode()
+        body = json.dumps({"model": model, "messages": messages, "stream": True, "keep_alive": "30m"}).encode()
         req = urllib.request.Request(url, data=body, method="POST")
         req.add_header("Content-Type", "application/json")
         try:
