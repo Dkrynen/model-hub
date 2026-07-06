@@ -5,6 +5,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { useAsync } from "@/lib/hooks";
 import { api } from "@/lib/api";
+import { TuneHero } from "@/components/pro/tune-hero";
 
 export function Pro() {
   const status = useAsync(() => api.proStatus());
@@ -38,10 +39,6 @@ export function Pro() {
       </div>
     </>
   );
-}
-
-function TuneHero() {
-  return <Card className="p-5 text-[13px] text-fg-muted">Tune hero — coming in the next task…</Card>;
 }
 
 function InsightsPanel() {
