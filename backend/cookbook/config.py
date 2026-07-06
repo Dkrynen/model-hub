@@ -124,6 +124,15 @@ def get_workspace(workspace_id: str) -> Optional[Workspace]:
     return None
 
 
+def resolve_under_data_root(name: str) -> Path:
+    """Resolve `name` under the LAC data root, rejecting any path that escapes it."""
+    root = CONFIG_DIR.resolve()
+    candidate = (root / name).resolve()
+    if candidate != root and root not in candidate.parents:
+        raise ValueError(f"path escapes the LAC data root: {name!r}")
+    return candidate
+
+
 def _resolve_within_workspaces(ws_id: str) -> Path:
     """Resolve ws_id under _workspaces_dir() and refuse a path that would
     escape the sandbox via '/', '\\', '..', or an absolute path.
