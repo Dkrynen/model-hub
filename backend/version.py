@@ -1,4 +1,4 @@
-__version__ = "2.6.0"
+__version__ = "2.6.1"
 __app_name__ = "LAC"
 __author__ = "LAC Contributors"
 __description__ = "Find your perfect local LLM — scans hardware, recommends models, installs and chats"

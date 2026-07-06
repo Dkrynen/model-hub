@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## 2.6.1 (2026-07-06)
+
+- **Much faster launch** — the app no longer re-extracts itself to a temp folder on every start (one-dir packaging). Warm launches drop from several seconds to well under one.
+- **Snappier UI** — the hardware probe is now cached for the session instead of re-running a system query on every scan/recommendation, so navigating the app is instant.
+- **Autopilot no longer thrashes your GPU** — installing several models in a row now benchmarks/tunes them one at a time instead of all at once in parallel.
+
 ## 2.6.0 (2026-07-06)
 
 - **Native desktop app** — LAC now opens as a real native window (Windows WebView2), not a browser tab: single-instance (no more stacked orphan servers), proper taskbar identity, and no console-window flashes on launch or navigation. If the WebView2 runtime is ever missing, it degrades gracefully to your browser.
