@@ -24,6 +24,7 @@ def test_launch_desktop_creates_window_when_serving(monkeypatch):
     monkeypatch.setattr(desktop, "acquire_single_instance", lambda: True)
     monkeypatch.setattr(desktop, "_start_server_thread", lambda h, p: None)
     monkeypatch.setattr(desktop, "_wait_until_serving", lambda h, p, timeout=20.0: True)
+    monkeypatch.setattr(desktop, "load_window_state", lambda: {"bounds": {}, "view": ""})
     rc = desktop.launch_desktop("127.0.0.1", 5050)
     assert rc == 0
     assert calls["create"][0][0] == "LAC"
