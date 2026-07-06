@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## 2.6.0 (2026-07-06)
+
+- **Native desktop app** — LAC now opens as a real native window (Windows WebView2), not a browser tab: single-instance (no more stacked orphan servers), proper taskbar identity, and no console-window flashes on launch or navigation. If the WebView2 runtime is ever missing, it degrades gracefully to your browser.
+- **Self-serve Pro activation** — activate Pro entirely from the app: **Settings → Activate Pro** installs the plugin, writes the license grant, shows a celebration of what unlocked, and LAC relaunches into Pro (landing back on the same view). No CLI step required. Settings now shows your live Pro status instead of always prompting for a key.
+- **Pro cockpit (`/pro`)** — the Pro tools are now a premium surface: **tune** any model to your exact hardware with before→after tok/s proof and one-click apply of the winning offload config; plus **calibration insights** (measured speed history + regression detection), on-demand **benchmarking**, an **autopilot** log of what was auto-tuned on install, and elevated **custom Hugging Face import** with a quant picker and history.
+- **Faster first message** — Chat now preloads the selected model into VRAM off the send path, so the first reply is near-instant (measured ~5s → ~0.2s) instead of paying a cold model-load penalty; the model is also kept warm between messages.
+- **System safety** — LAC will only ever terminate a process it actually owns (never a foreign process, even to reclaim its own port), routes every shell-out through a console-hiding wrapper, and confines writes to `~/.model-hub`.
+
 ## 2.5.0 (2026-07-06)
 
 - **Pro license encrypted at rest** — the license grant in `~/.model-hub/license.json` is now sealed with AES-256-GCM under a key derived (HKDF) from a stable machine id, instead of sitting in plaintext. The key never lands on disk in the clear, hand-editing the grant is detected (GCM auth tag), and a grant copied to another machine won't decrypt. Existing plaintext grants keep working and transparently upgrade to the encrypted form on the next write. Honest casual-bypass hardening — the client-side check isn't DRM.
