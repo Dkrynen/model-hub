@@ -155,10 +155,10 @@ export const api = {
       body: JSON.stringify({ key }),
     }).then((r) => r.json()),
 
-  appRelaunch: (view: string) =>
+  appRelaunch: (view: string, bounds?: { x: number; y: number; width: number; height: number }) =>
     fetch("/api/app/relaunch", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ view }),
+      body: JSON.stringify({ view, bounds }),
     }).then((r) => r.json()),
 };

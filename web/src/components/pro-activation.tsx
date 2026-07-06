@@ -65,7 +65,13 @@ export function ProActivation() {
     // running) and resolve with `{ state: "failed" }` — handle that so the
     // overlay doesn't hang forever with no way out.
     try {
-      const result = (await api.appRelaunch("settings")) as RelaunchResult;
+      const bounds = {
+        x: Math.round(window.screenX),
+        y: Math.round(window.screenY),
+        width: Math.round(window.outerWidth),
+        height: Math.round(window.outerHeight),
+      };
+      const result = (await api.appRelaunch("settings", bounds)) as RelaunchResult;
       if (result?.state === "failed") {
         setRelaunching(false);
         setError(result.message ?? "Could not relaunch. Please restart LAC manually.");
