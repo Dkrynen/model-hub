@@ -91,10 +91,14 @@ def _process_is_ours(pid: str) -> bool:
         out = proc.run(
             ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
             capture_output=True, text=True, timeout=10,
-        ).stdout.lower()
+        ).stdout
     except Exception:
         return False
-    return "lac.exe" in out
+    import csv as _csv
+    for row in _csv.reader(out.splitlines()):
+        if row and row[0].strip().lower() == "lac.exe":
+            return True
+    return False
 
 
 def kill_pids(pids: list[str]) -> list[str]:

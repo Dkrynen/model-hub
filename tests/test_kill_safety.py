@@ -39,3 +39,21 @@ def test_kill_pids_filters_to_ours(monkeypatch):
 def test_process_is_ours_true_for_registry(monkeypatch):
     server.proc.register_spawned(555)
     assert server._process_is_ours("555") is True
+
+
+def test_process_is_ours_true_for_real_lac_tasklist(monkeypatch):
+    monkeypatch.setattr(server.os, "name", "nt")
+    monkeypatch.setattr(server.proc, "is_ours", lambda pid: False)
+    class R:
+        stdout = '"lac.exe","1234","Console","1","5,000 K"\n'
+    monkeypatch.setattr(server.proc, "run", lambda *a, **k: R())
+    assert server._process_is_ours("1234") is True
+
+
+def test_process_is_ours_false_for_decoy_name(monkeypatch):
+    monkeypatch.setattr(server.os, "name", "nt")
+    monkeypatch.setattr(server.proc, "is_ours", lambda pid: False)
+    class R:
+        stdout = '"notlac.exe","1234","Console","1","5,000 K"\n'
+    monkeypatch.setattr(server.proc, "run", lambda *a, **k: R())
+    assert server._process_is_ours("1234") is False
