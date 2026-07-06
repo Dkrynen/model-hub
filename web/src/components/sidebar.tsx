@@ -6,6 +6,7 @@ import {
   Boxes,
   MessageSquare,
   Download,
+  Sparkles,
   BookOpen,
   Settings,
 } from "lucide-react";
@@ -20,6 +21,7 @@ const NAV = [
   { to: "/installed", label: "Installed", icon: Boxes, end: false },
   { to: "/chat", label: "Chat", icon: MessageSquare, end: false },
   { to: "/downloads", label: "Downloads", icon: Download, end: false },
+  { to: "/pro", label: "Pro", icon: Sparkles, end: false },
 ];
 
 export function Sidebar() {

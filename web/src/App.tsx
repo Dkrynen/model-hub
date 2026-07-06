@@ -12,6 +12,7 @@ import { Chat } from "@/pages/chat";
 import { Downloads } from "@/pages/downloads";
 import { Docs } from "@/pages/docs";
 import { Settings } from "@/pages/settings";
+import { Pro } from "./pages/pro";
 
 export default function App() {
   const { theme } = useTheme();
@@ -55,6 +56,7 @@ export default function App() {
               <Route path="/installed" element={<Installed />} />
               <Route path="/chat" element={<Chat />} />
               <Route path="/downloads" element={<Downloads />} />
+              <Route path="/pro" element={<Pro />} />
               <Route path="/docs" element={<Docs />} />
               <Route path="/settings" element={<Settings />} />
               <Route path="*" element={<Navigate to="/" replace />} />
