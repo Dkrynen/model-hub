@@ -161,4 +161,16 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ view, bounds }),
     }).then((r) => r.json()),
+
+  proTune: (model: string) =>
+    fetch("/api/pro/tune", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model }) }).then((r) => r.json()),
+  proTuneStatus: (model: string) => fetch(`/api/pro/tune-status?model=${encodeURIComponent(model)}`).then((r) => r.json()),
+  proTuneApply: (model: string, num_gpu: number, num_ctx?: number) =>
+    fetch("/api/pro/tune-apply", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model, num_gpu, num_ctx }) }).then((r) => r.json()),
+  proInsights: (threshold?: number) => fetch(`/api/pro/insights${threshold != null ? `?threshold=${threshold}` : ""}`).then((r) => r.json()),
+  proBenchmark: (model: string) =>
+    fetch("/api/pro/benchmark", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model }) }).then((r) => r.json()),
+  proBenchmarkHistory: (model: string) => fetch(`/api/pro/benchmark-history?model=${encodeURIComponent(model)}`).then((r) => r.json()),
+  proAutopilotLog: () => fetch("/api/pro/autopilot-log").then((r) => r.json()),
+  proImportHistory: () => fetch("/api/pro/import-history").then((r) => r.json()),
 };
