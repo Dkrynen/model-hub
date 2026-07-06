@@ -6,6 +6,8 @@ import { Button } from "@/components/ui/button";
 import { useAsync } from "@/lib/hooks";
 import { api } from "@/lib/api";
 import { TuneHero } from "@/components/pro/tune-hero";
+import { InsightsPanel } from "@/components/pro/insights-panel";
+import { AutopilotPanel } from "@/components/pro/autopilot-panel";
 
 export function Pro() {
   const status = useAsync(() => api.proStatus());
@@ -39,14 +41,6 @@ export function Pro() {
       </div>
     </>
   );
-}
-
-function InsightsPanel() {
-  return <Card className="p-5 text-[13px] text-fg-muted">Insights panel — coming in the next task…</Card>;
-}
-
-function AutopilotPanel() {
-  return <Card className="p-5 text-[13px] text-fg-muted">Autopilot panel — coming in the next task…</Card>;
 }
 
 function BenchmarkPanel() {
