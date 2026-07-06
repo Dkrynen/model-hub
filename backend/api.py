@@ -10,6 +10,7 @@ from typing import Optional
 
 from flask import Flask, Response, jsonify, request, stream_with_context
 
+from . import self_invoke
 from .cookbook import proc
 from .cookbook.hardware import detect, print_system
 from .cookbook.recommend import recommend, load_models
@@ -776,6 +777,33 @@ def api_pro_unlock():
     if not isinstance(key, str) or not key.strip():
         return jsonify({"error": "License key required"}), 400
     return jsonify(install_pro_plugin(key.strip()))
+
+
+@app.route("/api/pro/activate", methods=["POST"])
+def api_pro_activate():
+    """Self-serve Pro: install the plugin, then write the license grant by
+    running `lac pro activate` in a throwaway process with the key on STDIN
+    (never argv). Honest JSON states; never raises."""
+    data = request.get_json(silent=True)
+    key = data.get("key") if isinstance(data, dict) else None
+    if not isinstance(key, str) or not key.strip():
+        return jsonify({"error": "License key required"}), 400
+    key = key.strip()
+
+    installed = install_pro_plugin(key)
+    if installed.get("state") != "installed":
+        return jsonify({"state": "install_failed", **{k: v for k, v in installed.items() if k != "state"}})
+
+    try:
+        r = proc.run([*self_invoke.cli_prefix(), "pro", "activate"],
+                     input=key + "\n", capture_output=True, text=True, timeout=60)
+    except Exception as e:  # noqa: BLE001 — subprocess spawn failure
+        return jsonify({"state": "activation_failed",
+                        "message": f"Could not run activation: {e}"})
+    if r.returncode != 0:
+        msg = (r.stdout or r.stderr or "activation failed").strip().splitlines()[-1].strip()
+        return jsonify({"state": "activation_failed", "message": msg})
+    return jsonify({"state": "activated"})
 
 
 @app.errorhandler(404)
