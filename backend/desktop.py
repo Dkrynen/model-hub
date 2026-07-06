@@ -65,6 +65,17 @@ def _show_startup_error(host: str, port: int) -> None:
             pass
 
 
+def _show_dialog(text: str) -> None:
+    """Best-effort informational dialog on Windows. No-op elsewhere; never raises."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        ctypes.windll.user32.MessageBoxW(0, text, "LAC", 0x40)
+    except Exception:
+        pass
+
+
 _MUTEX_HANDLE = None  # kept alive for the process lifetime
 
 
@@ -124,8 +135,6 @@ def _open_window(host: str, port: int) -> int:
     url = f"http://{host}:{port}"
     try:
         import webview
-        if webview is None:
-            raise ImportError("webview unavailable")
         webview.create_window(WINDOW_TITLE, url, min_size=(1024, 700))
         webview.start()
         return 0
@@ -137,17 +146,13 @@ def _fallback_to_browser(host: str, port: int, reason: str) -> int:
     print(f"  ! Native window unavailable ({reason}).")
     print(f"  ! Opening LAC in your browser instead.")
     print(f"  ! For the desktop app, install the WebView2 runtime: {WEBVIEW2_RUNTIME_URL}")
-    if sys.platform == "win32":
-        try:
-            import ctypes
-            ctypes.windll.user32.MessageBoxW(
-                0,
-                "The desktop window needs the Microsoft WebView2 runtime.\n\n"
-                "LAC will open in your browser now. Install WebView2 for the app window:\n"
-                + WEBVIEW2_RUNTIME_URL,
-                "LAC", 0x40,
-            )
-        except Exception:
-            pass
-    webbrowser.open(f"http://{host}:{port}")
+    _show_dialog(
+        "The desktop window needs the Microsoft WebView2 runtime.\n\n"
+        "LAC will open in your browser now. Install WebView2 for the app window:\n"
+        + WEBVIEW2_RUNTIME_URL
+    )
+    try:
+        webbrowser.open(f"http://{host}:{port}")
+    except Exception:
+        pass
     return 0
