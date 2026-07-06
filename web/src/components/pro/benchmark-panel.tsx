@@ -44,6 +44,7 @@ export function BenchmarkPanel() {
   const [running, setRunning] = useState(false);
   const [pollCount, setPollCount] = useState(0);
   const [baselineTimestamp, setBaselineTimestamp] = useState<number | null>(null);
+  const [note, setNote] = useState<string | null>(null);
 
   // Default the select to the first installed model once the list arrives.
   useEffect(() => {
@@ -66,6 +67,7 @@ export function BenchmarkPanel() {
   useEffect(() => {
     if (!model) return;
     setRunning(false);
+    setNote(null);
     setHistoryLoading(true);
     loadHistory(model).finally(() => setHistoryLoading(false));
   }, [model, loadHistory]);
@@ -74,12 +76,21 @@ export function BenchmarkPanel() {
 
   useInterval(() => {
     if (!model) return;
-    setPollCount((c) => c + 1);
+    const nextCount = pollCount + 1;
+    setPollCount(nextCount);
     loadHistory(model).then((res) => {
       const runs = res?.state === "ok" ? res.runs ?? [] : [];
       const newest = runs[0]?.timestamp ?? null;
       if (newest != null && newest !== baselineTimestamp) {
         setRunning(false);
+        setNote(null);
+        return;
+      }
+      if (nextCount >= MAX_POLLS) {
+        // Cap reached with no new run visible yet — unstick the controls
+        // rather than leaving "Benchmarking…" disabled forever.
+        setRunning(false);
+        setNote("Still benchmarking — check back in a moment.");
       }
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -94,11 +105,13 @@ export function BenchmarkPanel() {
     const current = history?.state === "ok" ? history.runs?.[0]?.timestamp ?? null : null;
     setBaselineTimestamp(current);
     setPollCount(0);
+    setNote(null);
     setRunning(true);
     try {
       await api.proBenchmark(model);
     } catch {
       setRunning(false);
+      setNote("Couldn't start the benchmark — try again.");
     }
   }
 
@@ -139,6 +152,8 @@ export function BenchmarkPanel() {
           </div>
         ) : null}
       </div>
+
+      {note ? <p className="mb-3 text-[12px] text-fg-muted">{note}</p> : null}
 
       {installed.loading ? (
         <Skeleton className="h-20 w-full" />
