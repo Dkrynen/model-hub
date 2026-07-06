@@ -137,11 +137,30 @@ def launch_desktop(host: str = HOST, port: int = PORT) -> int:
     return _open_window(host, port)
 
 
+def load_window_state() -> dict:
+    try:
+        data = json.loads(WINDOW_STATE_PATH.read_text())
+        return {"bounds": dict(data.get("bounds") or {}), "view": str(data.get("view") or "")}
+    except Exception:
+        return {"bounds": {}, "view": ""}
+
+
 def _open_window(host: str, port: int) -> int:
+    state = load_window_state()
     url = f"http://{host}:{port}"
+    view = state.get("view")
+    if view:
+        url += f"/?view={view}"
+    geom = {}
+    b = state.get("bounds") or {}
+    for k in ("x", "y", "width", "height"):
+        if isinstance(b.get(k), int):
+            geom[k] = b[k]
     try:
         import webview
-        webview.create_window(WINDOW_TITLE, url, min_size=(1024, 700))
+        if webview is None:
+            raise ImportError("webview unavailable")
+        webview.create_window(WINDOW_TITLE, url, min_size=(1024, 700), **geom)
         webview.start()
         return 0
     except Exception as e:
