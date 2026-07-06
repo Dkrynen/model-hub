@@ -90,6 +90,9 @@ export const api = {
   installed: () => getJSON<import("./types").InstalledModel[]>("/api/ollama/models"),
   ps: () => getJSON<import("./types").PsResponse>("/api/ollama/ps"),
   delete: (model: string) => postJSON<{ success?: boolean; error?: string }>("/api/ollama/delete", { model }),
+  /** Preload a model into VRAM (fire-and-forget) so the first chat message isn't slow. */
+  warm: (model: string) =>
+    fetch("/api/ollama/warm", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model }) }).catch(() => {}),
 
   library: (params: { q?: string; capability?: string; sort?: string; compatible?: string } = {}) => {
     const q = new URLSearchParams();

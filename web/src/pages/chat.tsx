@@ -44,6 +44,10 @@ export function Chat() {
   }, [model, models]);
 
   useEffect(() => {
+    if (model) api.warm(model);
+  }, [model]);
+
+  useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [messages]);
 
