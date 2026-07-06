@@ -141,4 +141,24 @@ export const api = {
       | { state: "installed"; path: string }
       | { state: "failed"; error_type: string; message: string }
     >("/api/pro/unlock", { key }),
+
+  proStatus: async () => {
+    const r = await fetch("/api/pro/status");
+    if (r.status === 404) return { licensed: false, plan: null, expires_human: null, machine: null, checked: null };
+    return r.json();
+  },
+
+  activatePro: (key: string) =>
+    fetch("/api/pro/activate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key }),
+    }).then((r) => r.json()),
+
+  appRelaunch: (view: string) =>
+    fetch("/api/app/relaunch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ view }),
+    }).then((r) => r.json()),
 };
