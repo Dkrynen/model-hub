@@ -46,6 +46,12 @@ export function BenchmarkPanel() {
   const [baselineTimestamp, setBaselineTimestamp] = useState<number | null>(null);
   const [note, setNote] = useState<string | null>(null);
 
+  // Warm the selected model off the critical path so "Benchmark now" measures
+  // its real per-message speed, not the one-time cold load.
+  useEffect(() => {
+    if (model) api.warm(model);
+  }, [model]);
+
   // Default the select to the first installed model once the list arrives.
   useEffect(() => {
     if (!model && models.length > 0) setModel(models[0].name);

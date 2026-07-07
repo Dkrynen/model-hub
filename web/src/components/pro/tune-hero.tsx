@@ -66,6 +66,12 @@ export function TuneHero() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [models.length]);
 
+  // Warm the selected model off the critical path so the sweep measures its
+  // real speed, not the one-time cold load.
+  useEffect(() => {
+    if (model) api.warm(model);
+  }, [model]);
+
   // Expand the winner row by default whenever a sweep completes.
   useEffect(() => {
     if (status.state === "done") setExpanded(status.winner.label);

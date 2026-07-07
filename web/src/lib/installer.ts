@@ -165,7 +165,21 @@ const IMPORT_POLL_TIMEOUT_MS = 30 * 60 * 1000; // conversion can genuinely take 
  * {state: "not_licensed"} response -- both are routed through the same
  * try/catch-then-upsell handling pollProOptimizeStatus already established.
  */
+/** Accept whatever a user pastes for a Hugging Face model and reduce it to the
+ * `org/model` the backend expects: a full URL, `huggingface.co/org/model`,
+ * a `/tree/main` deep link, or already-bare `org/model` all normalize down. */
+export function normalizeRepoId(raw: string): string {
+  let s = (raw ?? "").trim();
+  s = s.replace(/^https?:\/\//i, "");
+  s = s.replace(/^(www\.)?(huggingface\.co|hf\.co)\//i, "");
+  s = s.split(/[?#]/)[0]; // drop query/hash
+  const parts = s.split("/").filter(Boolean);
+  if (parts.length >= 2) s = `${parts[0]}/${parts[1]}`; // org/model, drop /tree/main etc.
+  return s.replace(/\/+$/, "");
+}
+
 export async function importModelWithToast(repoId: string, quant: string | undefined, onDone?: () => void) {
+  repoId = normalizeRepoId(repoId);
   let kickoff: { accepted?: boolean; state?: string; error?: string };
   try {
     kickoff = await api.importModel(repoId, quant);
