@@ -18,6 +18,15 @@ interface Msg {
   content: string;
 }
 
+interface ChatStats {
+  ttft_ms?: number;
+  load_ms?: number;
+  prompt_ms?: number;
+  eval_ms?: number;
+  eval_count?: number;
+  tokens_per_second?: number;
+}
+
 const SUGGESTIONS = [
   "Explain GPU offloading in one paragraph.",
   "Write a haiku about local models.",
@@ -37,6 +46,7 @@ export function Chat() {
   const [warming, setWarming] = useState(false);
   const [system, setSystem] = useState("");
   const [showSystem, setShowSystem] = useState(false);
+  const [lastStats, setLastStats] = useState<ChatStats | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -78,22 +88,29 @@ export function Chat() {
     setMessages([...messages, { role: "user", content: text }, { role: "assistant", content: "" }]);
     setInput("");
     setStreaming(true);
+    setLastStats(null);
 
     const ac = new AbortController();
     abortRef.current = ac;
 
     try {
       let acc = "";
+      const startedAt = performance.now();
+      let ttftMs: number | undefined;
       for await (const ev of api.chat(model, history as { role: string; content: string }[], ac.signal)) {
         if (ev.error) throw new Error(String(ev.error));
         const delta = (ev.message as { content?: string } | undefined)?.content ?? "";
         if (delta) {
+          ttftMs ??= performance.now() - startedAt;
           acc += delta;
           setMessages((prev) => {
             const next = [...prev];
             next[next.length - 1] = { role: "assistant", content: acc };
             return next;
           });
+        }
+        if (ev.done === true) {
+          setLastStats(chatStatsFromEvent(ev, ttftMs));
         }
       }
     } catch (e) {
@@ -153,6 +170,11 @@ export function Chat() {
             <span className="text-[13px] text-fg-muted">No models installed</span>
           )}
           {warming && <span className="text-[12px] text-fg-muted">Warming model...</span>}
+          {lastStats && !streaming && !warming ? (
+            <span className="ml-auto hidden truncate text-[12px] text-fg-muted md:block">
+              {formatChatStats(lastStats)}
+            </span>
+          ) : null}
         </div>
 
         {/* messages */}
@@ -211,6 +233,40 @@ export function Chat() {
       </div>
     </>
   );
+}
+
+function nsToMs(value: unknown): number | undefined {
+  const n = Number(value ?? 0);
+  if (!Number.isFinite(n) || n <= 0) return undefined;
+  return n / 1_000_000;
+}
+
+function chatStatsFromEvent(ev: Record<string, unknown>, ttftMs?: number): ChatStats {
+  const evalMs = nsToMs(ev.eval_duration);
+  const evalCount = Number(ev.eval_count ?? 0);
+  const tokensPerSecond = evalMs && evalCount > 0 ? (evalCount / evalMs) * 1000 : undefined;
+  return {
+    ttft_ms: ttftMs,
+    load_ms: nsToMs(ev.load_duration),
+    prompt_ms: nsToMs(ev.prompt_eval_duration),
+    eval_ms: evalMs,
+    eval_count: evalCount > 0 ? evalCount : undefined,
+    tokens_per_second: tokensPerSecond,
+  };
+}
+
+function formatMs(ms: number | undefined): string | null {
+  if (!ms || !Number.isFinite(ms)) return null;
+  return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms)}ms`;
+}
+
+function formatChatStats(stats: ChatStats): string {
+  const parts = [
+    formatMs(stats.ttft_ms) ? `TTFT ${formatMs(stats.ttft_ms)}` : null,
+    formatMs(stats.load_ms) ? `load ${formatMs(stats.load_ms)}` : null,
+    stats.tokens_per_second ? `${Math.round(stats.tokens_per_second)} tok/s` : null,
+  ].filter(Boolean);
+  return parts.join(" / ");
 }
 
 function Bubble({ role, content, model }: { role: string; content: string; model: string }) {

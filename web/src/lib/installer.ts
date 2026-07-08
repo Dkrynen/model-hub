@@ -182,12 +182,13 @@ export async function importModelWithToast(
   repoId: string,
   quant: string | undefined,
   onDone?: () => void,
-  onSettled?: () => void
+  onSettled?: () => void,
+  filename?: string
 ) {
   repoId = normalizeRepoId(repoId);
   let kickoff: { accepted?: boolean; state?: string; error?: string };
   try {
-    kickoff = await api.importModel(repoId, quant);
+    kickoff = await api.importModel(repoId, quant, filename);
   } catch (e) {
     // Route unreachable (404 = Pro not installed at all, or transient) --
     // same "no Pro" outcome as an explicit not_licensed, same one-time upsell.

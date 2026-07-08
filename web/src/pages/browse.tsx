@@ -41,23 +41,23 @@ function asVerdict(fit: string | undefined): Verdict {
 }
 
 function hfFileOptions(model: HfGgufModel): HfGgufFile[] {
-  const seen = new Set<string>();
-  const out: HfGgufFile[] = [];
-  for (const file of model.files ?? []) {
-    if (!file.quant || seen.has(file.quant)) continue;
-    seen.add(file.quant);
-    out.push(file);
-  }
-  return out;
+  return (model.files ?? []).filter((file) => file.selection || file.filename);
 }
 
-function selectedHfFile(model: HfGgufModel, selectedQuant: string | undefined): HfGgufFile | undefined {
+function selectedHfFile(model: HfGgufModel, selectedValue: string | undefined): HfGgufFile | undefined {
   const files = hfFileOptions(model);
   return (
-    files.find((file) => file.quant === selectedQuant) ??
-    files.find((file) => file.quant === model.recommended_quant) ??
+    files.find((file) => (file.selection ?? file.filename) === selectedValue || file.filename === selectedValue) ??
+    files.find((file) => file.filename === model.recommended_file) ??
     files[0]
   );
+}
+
+function hfFileLabel(model: HfGgufModel, file: HfGgufFile): string {
+  const quant = file.quant ?? "GGUF";
+  const size = file.size_gb ? ` - ${fmtBytes(file.size_gb)}` : "";
+  const duplicateQuant = (model.files ?? []).filter((f) => f.quant === file.quant).length > 1;
+  return duplicateQuant ? `${quant}${size} - ${file.filename}` : `${quant}${size}`;
 }
 
 export function Browse() {
@@ -69,7 +69,7 @@ export function Browse() {
   const [limit, setLimit] = useState(36);
   const [newModel, setNewModel] = useState("");
   const [hfRepoId, setHfRepoId] = useState("");
-  const [hfQuantByRepo, setHfQuantByRepo] = useState<Record<string, string>>({});
+  const [hfSelectionByRepo, setHfSelectionByRepo] = useState<Record<string, string>>({});
 
   const lib = useAsync(
     () => api.library({ q, capability, sort, compatible: compatible ? "gpu" : "" }),
@@ -233,12 +233,13 @@ export function Browse() {
           ) : (
             <div className="grid grid-cols-1 gap-3 lg:grid-cols-2 xl:grid-cols-3">
               {hf.data?.models.map((m) => {
-                const selectedQuant = hfQuantByRepo[m.repo_id] ?? m.recommended_quant;
-                const selectedFile = selectedHfFile(m, selectedQuant);
+                const selectedValue = hfSelectionByRepo[m.repo_id] ?? m.recommended_file ?? m.recommended_quant;
+                const selectedFile = selectedHfFile(m, selectedValue);
                 const options = hfFileOptions(m);
                 const verdict = asVerdict(selectedFile?.fit ?? m.fit);
                 const selectedSize = selectedFile?.size_gb ?? m.recommended_size_gb;
                 const selectedVram = selectedFile?.vram_gb ?? m.vram_gb;
+                const selectedKey = selectedFile?.selection ?? selectedFile?.filename ?? selectedFile?.quant;
                 return (
                   <Card key={m.repo_id} className="flex min-h-[246px] flex-col justify-between p-4">
                     <div>
@@ -262,16 +263,16 @@ export function Browse() {
                           <div className="mb-1 text-[10px] uppercase tracking-[0.06em] text-fg-faint">Quant</div>
                           {options.length ? (
                             <Select
-                              value={selectedFile?.quant}
-                              onValueChange={(value) => setHfQuantByRepo((prev) => ({ ...prev, [m.repo_id]: value }))}
+                              value={selectedKey}
+                              onValueChange={(value) => setHfSelectionByRepo((prev) => ({ ...prev, [m.repo_id]: value }))}
                             >
                               <SelectTrigger className="h-8">
                                 <SelectValue />
                               </SelectTrigger>
                               <SelectContent>
                                 {options.map((file) => (
-                                  <SelectItem key={`${m.repo_id}-${file.quant}`} value={file.quant ?? ""}>
-                                    {file.quant} {file.size_gb ? `- ${fmtBytes(file.size_gb)}` : ""}
+                                  <SelectItem key={`${m.repo_id}-${file.filename}`} value={file.selection ?? file.filename}>
+                                    {hfFileLabel(m, file)}
                                   </SelectItem>
                                 ))}
                               </SelectContent>
@@ -282,7 +283,7 @@ export function Browse() {
                             </div>
                           )}
                         </div>
-                        {selectedQuant === m.recommended_quant ? <Badge variant="success">recommended</Badge> : null}
+                        {selectedFile?.filename === m.recommended_file ? <Badge variant="success">recommended</Badge> : null}
                       </div>
                       <div className="mt-3 grid grid-cols-3 gap-3">
                         <HfMetric label="Size" value={fmtBytes(selectedSize)} />
@@ -306,7 +307,13 @@ export function Browse() {
                     <div className="mt-4 flex gap-2">
                       <Button
                         size="sm"
-                        onClick={() => importModelWithToast(m.repo_id, selectedFile?.quant ?? m.recommended_quant, lib.reload)}
+                        onClick={() => importModelWithToast(
+                          m.repo_id,
+                          selectedFile?.quant ?? m.recommended_quant,
+                          lib.reload,
+                          undefined,
+                          selectedFile?.filename
+                        )}
                         disabled={options.length > 0 && !selectedFile?.importable}
                       >
                         Import {selectedFile?.quant ?? ""}

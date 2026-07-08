@@ -329,6 +329,7 @@ def test_hf_gguf_search_maps_public_metadata(monkeypatch, flask_app):
     from backend import api as api_mod
     from backend.cookbook.hardware import SystemInfo
 
+    api_mod._HF_DETAIL_CACHE.clear()
     captured = {}
     search_body = json.dumps([
         {
@@ -408,11 +409,40 @@ def test_hf_gguf_search_maps_public_metadata(monkeypatch, flask_app):
     assert data["models"][0]["recommended_size_gb"] == 3.73
     assert data["models"][0]["fit"] == "fits"
     assert data["models"][0]["files"][0]["filename"] == "model-Q4_K_M.gguf"
+    assert data["models"][0]["files"][0]["selection"] == "model-Q4_K_M.gguf"
     assert data["models"][0]["files"][0]["vram_gb"] == 4.65
     assert data["system_vram"] == 6.0
     assert any("qwen+gguf" in url for url in captured["urls"])
     assert any("/api/models/org/model-GGUF" in url for url in captured["urls"])
     assert captured["ua"].startswith("LAC/")
+
+
+def test_fetch_hf_model_detail_uses_short_ttl_cache(monkeypatch):
+    import urllib.request as real_urllib_request
+    from backend import api as api_mod
+
+    api_mod._HF_DETAIL_CACHE.clear()
+    calls = []
+
+    class FakeResp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return b'{"id":"org/model-GGUF","siblings":[]}'
+
+    def fake_urlopen(req, timeout=8):
+        calls.append(req.full_url)
+        return FakeResp()
+
+    monkeypatch.setattr(real_urllib_request, "urlopen", fake_urlopen)
+
+    assert api_mod._fetch_hf_model_detail("org/model-GGUF")["id"] == "org/model-GGUF"
+    assert api_mod._fetch_hf_model_detail("org/model-GGUF")["id"] == "org/model-GGUF"
+    assert len(calls) == 1
 
 
 def test_hf_gguf_search_empty_query_is_local_only(flask_app):

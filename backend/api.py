@@ -5,6 +5,7 @@ import re
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Optional
 
@@ -34,6 +35,10 @@ PULL_PROGRESS = {}
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
 
 MODEL_WEIGHT_EXTS = {".gguf", ".safetensors", ".bin", ".onnx", ".pt", ".pth"}
+HF_DETAIL_CACHE_TTL_S = 10 * 60
+HF_DETAIL_CACHE_MAX = 256
+_HF_DETAIL_CACHE: dict[str, tuple[float, dict | None]] = {}
+_HF_DETAIL_CACHE_LOCK = threading.Lock()
 
 
 def _safe_dir_size(path: Path) -> int | None:
@@ -837,6 +842,7 @@ def _hf_gguf_files(siblings: list[dict], system_vram: float | None, ram_gb: floa
         fit = _hf_file_fit(size, system_vram, ram_gb)
         files.append({
             "filename": filename,
+            "selection": filename,
             "quant": quant,
             "size_bytes": size,
             "size_gb": _bytes_to_gb(size),
@@ -889,6 +895,12 @@ def _fetch_hf_model_detail(repo_id: str) -> dict | None:
     import urllib.parse
     import urllib.request
 
+    now = time.time()
+    with _HF_DETAIL_CACHE_LOCK:
+        cached = _HF_DETAIL_CACHE.get(repo_id)
+        if cached and now - cached[0] < HF_DETAIL_CACHE_TTL_S:
+            return cached[1]
+
     encoded = "/".join(urllib.parse.quote(part, safe="") for part in repo_id.split("/"))
     req = urllib.request.Request(
         f"https://huggingface.co/api/models/{encoded}?blobs=true",
@@ -897,10 +909,21 @@ def _fetch_hf_model_detail(repo_id: str) -> dict | None:
     )
     with urllib.request.urlopen(req, timeout=8) as resp:
         data = json.loads(resp.read().decode())
-    return data if isinstance(data, dict) else None
+    result = data if isinstance(data, dict) else None
+    with _HF_DETAIL_CACHE_LOCK:
+        _HF_DETAIL_CACHE[repo_id] = (time.time(), result)
+        if len(_HF_DETAIL_CACHE) > HF_DETAIL_CACHE_MAX:
+            oldest = min(_HF_DETAIL_CACHE, key=lambda key: _HF_DETAIL_CACHE[key][0])
+            _HF_DETAIL_CACHE.pop(oldest, None)
+    return result
 
 
-def _hf_gguf_result(item: dict, system_vram: float | None, ram_gb: float | None) -> dict | None:
+def _hf_gguf_result(
+    item: dict,
+    system_vram: float | None,
+    ram_gb: float | None,
+    detail: dict | None = None,
+) -> dict | None:
     repo_id = item.get("id") or item.get("modelId")
     if not isinstance(repo_id, str):
         return None
@@ -909,11 +932,6 @@ def _hf_gguf_result(item: dict, system_vram: float | None, ram_gb: float | None)
     if not isinstance(siblings, list):
         siblings = []
 
-    detail = None
-    try:
-        detail = _fetch_hf_model_detail(repo_id)
-    except Exception:
-        detail = None
     if detail:
         tags = [t for t in detail.get("tags", tags) if isinstance(t, str)]
         detail_siblings = detail.get("siblings", [])
@@ -992,14 +1010,39 @@ def _search_hf_gguf(query: str, limit: int = 12) -> dict:
     except Exception as exc:  # noqa: BLE001 - search is optional; Browse must still work
         return {"query": query, "total": 0, "models": [], "error": str(exc)}
 
-    out = []
+    candidates = []
     seen: set[str] = set()
     for item in data if isinstance(data, list) else []:
         repo_id = item.get("id") or item.get("modelId")
         if not isinstance(repo_id, str) or repo_id in seen:
             continue
         seen.add(repo_id)
-        mapped = _hf_gguf_result(item, system_vram, ram_gb)
+        candidates.append(item)
+
+    details: dict[str, dict | None] = {}
+    if candidates:
+        workers = min(8, len(candidates))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {
+                pool.submit(_fetch_hf_model_detail, item.get("id") or item.get("modelId")): item
+                for item in candidates
+                if isinstance(item.get("id") or item.get("modelId"), str)
+            }
+            for future in as_completed(futures):
+                item = futures[future]
+                repo_id = item.get("id") or item.get("modelId")
+                if not isinstance(repo_id, str):
+                    continue
+                try:
+                    details[repo_id] = future.result()
+                except Exception:
+                    details[repo_id] = None
+
+    out = []
+    for item in candidates:
+        repo_id = item.get("id") or item.get("modelId")
+        detail = details.get(repo_id) if isinstance(repo_id, str) else None
+        mapped = _hf_gguf_result(item, system_vram, ram_gb, detail=detail)
         if mapped:
             out.append(mapped)
 

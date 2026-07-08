@@ -157,6 +157,7 @@ export interface HfGgufModel {
 }
 export interface HfGgufFile {
   filename: string;
+  selection: string;
   quant?: string;
   size_bytes?: number;
   size_gb?: number;

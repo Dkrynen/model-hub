@@ -161,10 +161,11 @@ export const api = {
       `/api/pro/optimize-status?model=${encodeURIComponent(model)}`
     ),
   /** Kick off a LAC Pro custom Hugging Face model import (background). */
-  importModel: (repoId: string, quant?: string) =>
+  importModel: (repoId: string, quant?: string, filename?: string) =>
     postJSON<{ accepted?: boolean; state?: string; error?: string }>("/api/pro/import-model", {
       repo_id: repoId,
       quant: quant ?? null,
+      filename: filename ?? null,
     }),
   /** Poll a custom-model import's progress. */
   importStatus: (repoId: string) =>
@@ -181,9 +182,10 @@ export const api = {
     }>(
       `/api/pro/import-status?repo_id=${encodeURIComponent(repoId)}`
     ),
-  resolveImport: (repoId: string, quant?: string) => {
+  resolveImport: (repoId: string, quant?: string, filename?: string) => {
     const q = new URLSearchParams({ repo_id: repoId });
     if (quant) q.set("quant", quant);
+    if (filename) q.set("filename", filename);
     return getJSON<{
       state: string;
       repo_id?: string;
