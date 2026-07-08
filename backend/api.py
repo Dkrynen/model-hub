@@ -716,13 +716,242 @@ def api_library_tags():
         return jsonify({"error": str(e), "name": name, "tags": []})
 
 
+_GGUF_QUANT_PAT = re.compile(
+    r"(?i)(^|[^A-Za-z0-9])"
+    r"(IQ[1-4]_(?:XXS|XS|S|M|L|XL|NL)|"
+    r"Q[2-8](?:_K(?:_XS|_S|_M|_L|_XL)?|_[0-8])?|"
+    r"F32|BF16|F16|FP16)"
+    r"([^A-Za-z0-9]|$)"
+)
+_GGUF_QUANT_SORT = {
+    "IQ1_S": 1,
+    "IQ1_M": 2,
+    "IQ2_XXS": 3,
+    "IQ2_XS": 4,
+    "IQ2_S": 5,
+    "IQ2_M": 6,
+    "Q2_K": 7,
+    "Q2_K_S": 8,
+    "Q2_K_M": 9,
+    "Q2_K_L": 10,
+    "IQ3_XXS": 11,
+    "IQ3_XS": 12,
+    "IQ3_S": 13,
+    "IQ3_M": 14,
+    "Q3_K_S": 15,
+    "Q3_K_M": 16,
+    "Q3_K_L": 17,
+    "Q3_K_XL": 18,
+    "IQ4_XS": 19,
+    "IQ4_NL": 20,
+    "IQ4_M": 21,
+    "Q4_0": 22,
+    "Q4_K_S": 23,
+    "Q4_K_M": 24,
+    "Q5_0": 25,
+    "Q5_K_S": 26,
+    "Q5_K_M": 27,
+    "Q6_K": 28,
+    "Q8_0": 29,
+    "Q8": 30,
+    "F16": 31,
+    "BF16": 32,
+    "F32": 33,
+}
+_GGUF_IMPORT_PREFERENCE = [
+    "Q4_K_M",
+    "Q4_K_S",
+    "Q5_K_M",
+    "Q5_0",
+    "Q6_K",
+    "Q8_0",
+    "Q8",
+    "IQ4_XS",
+    "IQ4_NL",
+    "Q3_K_M",
+    "Q3_K_L",
+    "Q3_K_S",
+    "IQ3_M",
+    "IQ3_XS",
+    "Q2_K",
+    "IQ2_M",
+    "F16",
+    "BF16",
+    "F32",
+]
+
+
+def _gguf_quant(filename: str) -> str | None:
+    match = _GGUF_QUANT_PAT.search(filename or "")
+    if not match:
+        return None
+    quant = match.group(2).upper().replace("-", "_").replace("FP16", "F16")
+    return quant
+
+
+def _quant_sort_key(quant: str | None) -> tuple[int, str]:
+    q = quant or ""
+    return (_GGUF_QUANT_SORT.get(q, 999), q)
+
+
 def _gguf_quants(filenames: list[str]) -> list[str]:
-    quants: set[str] = set()
-    pat = re.compile(r"(?i)(IQ[1-4]_[A-Z]+|Q[2-8](?:_K_[SML]|_K|_[0-8](?:_[0-8])*)|F16|FP16)")
-    for name in filenames:
-        for match in pat.findall(name):
-            quants.add(match.upper().replace("FP16", "F16"))
-    return sorted(quants)
+    quants = {_gguf_quant(name) for name in filenames}
+    return sorted((q for q in quants if q), key=_quant_sort_key)
+
+
+def _bytes_to_gb(size_bytes: int | None) -> float | None:
+    if not size_bytes:
+        return None
+    return round(size_bytes / (1024**3), 2)
+
+
+def _hf_file_fit(size_bytes: int | None, system_vram: float | None, ram_gb: float | None) -> dict:
+    size_gb = _bytes_to_gb(size_bytes)
+    if not size_gb:
+        return {"fit": "unknown", "vram_gb": None}
+    # GGUF runtime memory is more than the file on disk: KV cache, graph buffers,
+    # and allocator headroom. Keep this deliberately conservative for previews.
+    required_gb = round((size_gb * 1.18) + 0.25, 2)
+    if system_vram and required_gb <= system_vram * 0.9:
+        return {"fit": "fits", "vram_gb": required_gb}
+    if (system_vram and required_gb <= system_vram * 2.0) or (ram_gb and required_gb <= ram_gb * 0.75):
+        return {"fit": "offload", "vram_gb": required_gb}
+    return {"fit": "too_large", "vram_gb": required_gb}
+
+
+def _hf_gguf_files(siblings: list[dict], system_vram: float | None, ram_gb: float | None) -> list[dict]:
+    files = []
+    for sibling in siblings:
+        if not isinstance(sibling, dict):
+            continue
+        filename = sibling.get("rfilename") or sibling.get("filename")
+        if not isinstance(filename, str) or not filename.lower().endswith(".gguf"):
+            continue
+        size = sibling.get("size")
+        lfs = sibling.get("lfs")
+        if not isinstance(size, int) and isinstance(lfs, dict) and isinstance(lfs.get("size"), int):
+            size = lfs["size"]
+        if not isinstance(size, int):
+            size = None
+        quant = _gguf_quant(filename)
+        fit = _hf_file_fit(size, system_vram, ram_gb)
+        files.append({
+            "filename": filename,
+            "quant": quant,
+            "size_bytes": size,
+            "size_gb": _bytes_to_gb(size),
+            "fit": fit["fit"],
+            "vram_gb": fit["vram_gb"],
+            "importable": bool(quant),
+        })
+    return sorted(files, key=lambda f: (_quant_sort_key(f.get("quant")), f["filename"].lower()))
+
+
+def _choose_hf_file(files: list[dict]) -> dict | None:
+    importable = [f for f in files if f.get("importable")]
+    if not importable:
+        return files[0] if files else None
+    non_blocked = [f for f in importable if f.get("fit") != "too_large"] or importable
+    by_quant: dict[str, list[dict]] = {}
+    for file in non_blocked:
+        by_quant.setdefault(file.get("quant") or "", []).append(file)
+    for quant in _GGUF_IMPORT_PREFERENCE:
+        if quant in by_quant:
+            return min(by_quant[quant], key=lambda f: f.get("size_bytes") or 0)
+    return min(non_blocked, key=lambda f: _quant_sort_key(f.get("quant")))
+
+
+def _hf_license(tags: list[str], card_data: dict | None) -> str | None:
+    if isinstance(card_data, dict):
+        license_name = card_data.get("license")
+        if isinstance(license_name, str) and license_name:
+            return license_name
+    for tag in tags:
+        if tag.startswith("license:"):
+            return tag.split(":", 1)[1]
+    return None
+
+
+def _hf_base_model(tags: list[str], card_data: dict | None) -> str | None:
+    if isinstance(card_data, dict):
+        base_model = card_data.get("base_model")
+        if isinstance(base_model, str):
+            return base_model
+        if isinstance(base_model, list) and base_model and isinstance(base_model[0], str):
+            return base_model[0]
+    for tag in tags:
+        if tag.startswith("base_model:") and not tag.startswith("base_model:quantized:"):
+            return tag.split(":", 1)[1]
+    return None
+
+
+def _fetch_hf_model_detail(repo_id: str) -> dict | None:
+    import urllib.parse
+    import urllib.request
+
+    encoded = "/".join(urllib.parse.quote(part, safe="") for part in repo_id.split("/"))
+    req = urllib.request.Request(
+        f"https://huggingface.co/api/models/{encoded}?blobs=true",
+        headers={"Accept": "application/json", "User-Agent": f"LAC/{APP_VERSION}"},
+        method="GET",
+    )
+    with urllib.request.urlopen(req, timeout=8) as resp:
+        data = json.loads(resp.read().decode())
+    return data if isinstance(data, dict) else None
+
+
+def _hf_gguf_result(item: dict, system_vram: float | None, ram_gb: float | None) -> dict | None:
+    repo_id = item.get("id") or item.get("modelId")
+    if not isinstance(repo_id, str):
+        return None
+    tags = [t for t in item.get("tags", []) if isinstance(t, str)]
+    siblings = item.get("siblings", [])
+    if not isinstance(siblings, list):
+        siblings = []
+
+    detail = None
+    try:
+        detail = _fetch_hf_model_detail(repo_id)
+    except Exception:
+        detail = None
+    if detail:
+        tags = [t for t in detail.get("tags", tags) if isinstance(t, str)]
+        detail_siblings = detail.get("siblings", [])
+        if isinstance(detail_siblings, list):
+            siblings = detail_siblings
+
+    filenames = [
+        s.get("rfilename", "")
+        for s in siblings
+        if isinstance(s, dict) and isinstance(s.get("rfilename"), str)
+    ]
+    files = _hf_gguf_files(siblings, system_vram, ram_gb)
+    if not files and not any(t.lower() == "gguf" for t in tags):
+        return None
+
+    selected = _choose_hf_file(files)
+    card_data = detail.get("cardData") if isinstance(detail, dict) else item.get("cardData")
+    pipeline_tag = (detail or item).get("pipeline_tag") if isinstance((detail or item), dict) else None
+    return {
+        "repo_id": repo_id,
+        "author": (detail or item).get("author") if isinstance((detail or item), dict) else item.get("author"),
+        "downloads": (detail or item).get("downloads") or item.get("downloads") or 0,
+        "likes": (detail or item).get("likes") or item.get("likes") or 0,
+        "gated": bool((detail or item).get("gated")) if isinstance((detail or item), dict) else bool(item.get("gated")),
+        "last_modified": (detail or item).get("lastModified") if isinstance((detail or item), dict) else item.get("lastModified"),
+        "tags": tags[:8],
+        "license": _hf_license(tags, card_data if isinstance(card_data, dict) else None),
+        "base_model": _hf_base_model(tags, card_data if isinstance(card_data, dict) else None),
+        "pipeline_tag": pipeline_tag if isinstance(pipeline_tag, str) else None,
+        "gguf_files": len(files) or len([f for f in filenames if f.lower().endswith(".gguf")]),
+        "quants": _gguf_quants([f["filename"] for f in files] or filenames)[:16],
+        "files": files[:18],
+        "recommended_quant": selected.get("quant") if selected else None,
+        "recommended_file": selected.get("filename") if selected else None,
+        "recommended_size_gb": selected.get("size_gb") if selected else None,
+        "fit": selected.get("fit") if selected else "unknown",
+        "vram_gb": selected.get("vram_gb") if selected else None,
+    }
 
 
 def _search_hf_gguf(query: str, limit: int = 12) -> dict:
@@ -735,6 +964,14 @@ def _search_hf_gguf(query: str, limit: int = 12) -> dict:
     if not query:
         return {"query": query, "total": 0, "models": []}
     limit = max(1, min(int(limit or 12), 24))
+    system_vram = None
+    ram_gb = None
+    try:
+        info = detect()
+        system_vram = info.total_vram_gb or (info.gpus[0].vram_gb if info.gpus else 0)
+        ram_gb = info.ram_gb
+    except Exception:
+        pass
 
     try:
         import urllib.parse
@@ -762,29 +999,11 @@ def _search_hf_gguf(query: str, limit: int = 12) -> dict:
         if not isinstance(repo_id, str) or repo_id in seen:
             continue
         seen.add(repo_id)
-        tags = [t for t in item.get("tags", []) if isinstance(t, str)]
-        siblings = item.get("siblings", [])
-        filenames = [
-            s.get("rfilename", "")
-            for s in siblings
-            if isinstance(s, dict) and isinstance(s.get("rfilename"), str)
-        ]
-        gguf_files = [f for f in filenames if f.lower().endswith(".gguf")]
-        if not gguf_files and not any(t.lower() == "gguf" for t in tags):
-            continue
-        out.append({
-            "repo_id": repo_id,
-            "author": item.get("author"),
-            "downloads": item.get("downloads") or 0,
-            "likes": item.get("likes") or 0,
-            "gated": bool(item.get("gated")),
-            "last_modified": item.get("lastModified"),
-            "tags": tags[:8],
-            "gguf_files": len(gguf_files),
-            "quants": _gguf_quants(gguf_files)[:10],
-        })
+        mapped = _hf_gguf_result(item, system_vram, ram_gb)
+        if mapped:
+            out.append(mapped)
 
-    return {"query": query, "total": len(out), "models": out}
+    return {"query": query, "total": len(out), "system_vram": system_vram, "ram_gb": ram_gb, "models": out}
 
 
 @app.route("/api/hf/gguf-search")

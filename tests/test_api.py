@@ -326,9 +326,11 @@ def test_check_update_uses_lac_repo_and_useragent(monkeypatch, flask_app):
 
 def test_hf_gguf_search_maps_public_metadata(monkeypatch, flask_app):
     import urllib.request as real_urllib_request
+    from backend import api as api_mod
+    from backend.cookbook.hardware import SystemInfo
 
     captured = {}
-    body = json.dumps([
+    search_body = json.dumps([
         {
             "id": "org/model-GGUF",
             "author": "org",
@@ -349,8 +351,27 @@ def test_hf_gguf_search_maps_public_metadata(monkeypatch, flask_app):
             "siblings": [{"rfilename": "model.safetensors"}],
         },
     ]).encode()
+    detail_body = json.dumps({
+        "id": "org/model-GGUF",
+        "author": "org",
+        "downloads": 123,
+        "likes": 4,
+        "gated": False,
+        "lastModified": "2026-01-01T00:00:00Z",
+        "tags": ["gguf", "text-generation", "license:apache-2.0", "base_model:org/base"],
+        "pipeline_tag": "text-generation",
+        "cardData": {"license": "apache-2.0", "base_model": "org/base"},
+        "siblings": [
+            {"rfilename": "model-Q4_K_M.gguf", "size": 4_000_000_000},
+            {"rfilename": "model-Q8_0.gguf", "size": 8_000_000_000},
+            {"rfilename": "README.md", "size": 1000},
+        ],
+    }).encode()
 
     class FakeResp:
+        def __init__(self, payload: bytes):
+            self.payload = payload
+
         def __enter__(self):
             return self
 
@@ -358,14 +379,20 @@ def test_hf_gguf_search_maps_public_metadata(monkeypatch, flask_app):
             return False
 
         def read(self):
-            return body
+            return self.payload
 
     def fake_urlopen(req, timeout=12):
-        captured["url"] = req.full_url
+        captured.setdefault("urls", []).append(req.full_url)
         captured["ua"] = req.get_header("User-agent")
-        return FakeResp()
+        if "/api/models/org/model-GGUF" in req.full_url:
+            return FakeResp(detail_body)
+        return FakeResp(search_body)
 
     monkeypatch.setattr(real_urllib_request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(api_mod, "detect", lambda: SystemInfo(
+        os="Test", cpu="Test", cpu_cores=8, ram_gb=32.0,
+        gpus=[], total_vram_gb=6.0, combined_vram_gb=6.0, compute_tiers=[],
+    ))
 
     r = flask_app.test_client().get("/api/hf/gguf-search?q=qwen&limit=5")
     assert r.status_code == 200
@@ -375,7 +402,16 @@ def test_hf_gguf_search_maps_public_metadata(monkeypatch, flask_app):
     assert data["models"][0]["repo_id"] == "org/model-GGUF"
     assert data["models"][0]["gguf_files"] == 2
     assert data["models"][0]["quants"] == ["Q4_K_M", "Q8_0"]
-    assert "qwen+gguf" in captured["url"]
+    assert data["models"][0]["license"] == "apache-2.0"
+    assert data["models"][0]["base_model"] == "org/base"
+    assert data["models"][0]["recommended_quant"] == "Q4_K_M"
+    assert data["models"][0]["recommended_size_gb"] == 3.73
+    assert data["models"][0]["fit"] == "fits"
+    assert data["models"][0]["files"][0]["filename"] == "model-Q4_K_M.gguf"
+    assert data["models"][0]["files"][0]["vram_gb"] == 4.65
+    assert data["system_vram"] == 6.0
+    assert any("qwen+gguf" in url for url in captured["urls"])
+    assert any("/api/models/org/model-GGUF" in url for url in captured["urls"])
     assert captured["ua"].startswith("LAC/")
 
 

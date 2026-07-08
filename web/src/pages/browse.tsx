@@ -13,6 +13,9 @@ import { Switch } from "@/components/ui/switch";
 import { useAsync } from "@/lib/hooks";
 import { api } from "@/lib/api";
 import { pullWithToast, importModelWithToast } from "@/lib/installer";
+import { FitBar, VerdictBadge, type Verdict } from "@/components/verdict";
+import { fmtBytes } from "@/lib/utils";
+import type { HfGgufFile, HfGgufModel } from "@/lib/types";
 
 const CAPS = [
   { v: "", l: "All capabilities" },
@@ -32,6 +35,31 @@ function isHuggingFacePageUrl(value: string): boolean {
   return /^https?:\/\/(www\.)?huggingface\.co\//i.test(value.trim());
 }
 
+function asVerdict(fit: string | undefined): Verdict {
+  if (fit === "fits" || fit === "offload" || fit === "too_large") return fit;
+  return "unknown";
+}
+
+function hfFileOptions(model: HfGgufModel): HfGgufFile[] {
+  const seen = new Set<string>();
+  const out: HfGgufFile[] = [];
+  for (const file of model.files ?? []) {
+    if (!file.quant || seen.has(file.quant)) continue;
+    seen.add(file.quant);
+    out.push(file);
+  }
+  return out;
+}
+
+function selectedHfFile(model: HfGgufModel, selectedQuant: string | undefined): HfGgufFile | undefined {
+  const files = hfFileOptions(model);
+  return (
+    files.find((file) => file.quant === selectedQuant) ??
+    files.find((file) => file.quant === model.recommended_quant) ??
+    files[0]
+  );
+}
+
 export function Browse() {
   const [params, setParams] = useSearchParams();
   const [q, setQ] = useState(params.get("q") ?? "");
@@ -41,6 +69,7 @@ export function Browse() {
   const [limit, setLimit] = useState(36);
   const [newModel, setNewModel] = useState("");
   const [hfRepoId, setHfRepoId] = useState("");
+  const [hfQuantByRepo, setHfQuantByRepo] = useState<Record<string, string>>({});
 
   const lib = useAsync(
     () => api.library({ q, capability, sort, compatible: compatible ? "gpu" : "" }),
@@ -203,35 +232,92 @@ export function Browse() {
             </Card>
           ) : (
             <div className="grid grid-cols-1 gap-3 lg:grid-cols-2 xl:grid-cols-3">
-              {hf.data?.models.map((m) => (
-                <Card key={m.repo_id} className="flex min-h-[150px] flex-col justify-between p-4">
-                  <div>
-                    <div className="break-all font-mono text-sm font-semibold text-fg">{m.repo_id}</div>
-                    <div className="mt-2 flex flex-wrap gap-1.5">
-                      {m.gated && <Badge variant="warning">gated</Badge>}
-                      <Badge variant="neutral">{m.gguf_files} GGUF</Badge>
-                      <Badge variant="neutral">{Number(m.downloads ?? 0).toLocaleString()} downloads</Badge>
-                    </div>
-                    {m.quants.length ? (
-                      <div className="mt-3 flex flex-wrap gap-1">
-                        {m.quants.slice(0, 6).map((q) => (
-                          <span key={q} className="rounded border border-line bg-panel-2 px-1.5 py-0.5 text-[11px] text-fg-muted">
-                            {q}
-                          </span>
-                        ))}
+              {hf.data?.models.map((m) => {
+                const selectedQuant = hfQuantByRepo[m.repo_id] ?? m.recommended_quant;
+                const selectedFile = selectedHfFile(m, selectedQuant);
+                const options = hfFileOptions(m);
+                const verdict = asVerdict(selectedFile?.fit ?? m.fit);
+                const selectedSize = selectedFile?.size_gb ?? m.recommended_size_gb;
+                const selectedVram = selectedFile?.vram_gb ?? m.vram_gb;
+                return (
+                  <Card key={m.repo_id} className="flex min-h-[246px] flex-col justify-between p-4">
+                    <div>
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0 break-all font-mono text-sm font-semibold text-fg">{m.repo_id}</div>
+                        <VerdictBadge verdict={verdict} className="shrink-0" />
                       </div>
-                    ) : null}
-                  </div>
-                  <div className="mt-4 flex gap-2">
-                    <Button size="sm" onClick={() => importModelWithToast(m.repo_id, undefined, lib.reload)}>
-                      Import
-                    </Button>
-                    <Button size="sm" variant="ghost" onClick={() => window.open(`https://huggingface.co/${m.repo_id}`, "_blank")}>
-                      <ExternalLink /> Open
-                    </Button>
-                  </div>
-                </Card>
-              ))}
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {m.gated && <Badge variant="warning">gated</Badge>}
+                        {m.license && <Badge variant="outline">{m.license}</Badge>}
+                        <Badge variant="neutral">{m.gguf_files} GGUF</Badge>
+                        <Badge variant="neutral">{Number(m.downloads ?? 0).toLocaleString()} downloads</Badge>
+                      </div>
+                      {m.base_model ? (
+                        <div className="mt-2 truncate text-[12px] text-fg-muted" title={m.base_model}>
+                          base: <span className="font-mono">{m.base_model}</span>
+                        </div>
+                      ) : null}
+                      <div className="mt-3 grid grid-cols-[1fr_auto] items-end gap-2">
+                        <div>
+                          <div className="mb-1 text-[10px] uppercase tracking-[0.06em] text-fg-faint">Quant</div>
+                          {options.length ? (
+                            <Select
+                              value={selectedFile?.quant}
+                              onValueChange={(value) => setHfQuantByRepo((prev) => ({ ...prev, [m.repo_id]: value }))}
+                            >
+                              <SelectTrigger className="h-8">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {options.map((file) => (
+                                  <SelectItem key={`${m.repo_id}-${file.quant}`} value={file.quant ?? ""}>
+                                    {file.quant} {file.size_gb ? `- ${fmtBytes(file.size_gb)}` : ""}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          ) : (
+                            <div className="flex h-8 items-center rounded border border-line bg-panel-2 px-2 text-[13px] text-fg-muted">
+                              auto
+                            </div>
+                          )}
+                        </div>
+                        {selectedQuant === m.recommended_quant ? <Badge variant="success">recommended</Badge> : null}
+                      </div>
+                      <div className="mt-3 grid grid-cols-3 gap-3">
+                        <HfMetric label="Size" value={fmtBytes(selectedSize)} />
+                        <HfMetric label="VRAM" value={selectedVram ? `${selectedVram.toFixed(1)} GB` : "unknown"} />
+                        <HfMetric label="Likes" value={Number(m.likes ?? 0).toLocaleString()} />
+                      </div>
+                      {selectedVram && (hf.data?.system_vram ?? 0) > 0 ? (
+                        <div className="mt-3">
+                          <FitBar req={selectedVram} total={hf.data?.system_vram ?? 0} verdict={verdict} />
+                          <div className="mt-1 text-[11px] text-fg-faint">
+                            {Math.round((selectedVram / (hf.data?.system_vram ?? 1)) * 100)}% of {hf.data?.system_vram} GB VRAM
+                          </div>
+                        </div>
+                      ) : null}
+                      {selectedFile?.filename ? (
+                        <div className="mt-2 truncate font-mono text-[11px] text-fg-faint" title={selectedFile.filename}>
+                          {selectedFile.filename}
+                        </div>
+                      ) : null}
+                    </div>
+                    <div className="mt-4 flex gap-2">
+                      <Button
+                        size="sm"
+                        onClick={() => importModelWithToast(m.repo_id, selectedFile?.quant ?? m.recommended_quant, lib.reload)}
+                        disabled={options.length > 0 && !selectedFile?.importable}
+                      >
+                        Import {selectedFile?.quant ?? ""}
+                      </Button>
+                      <Button size="sm" variant="ghost" onClick={() => window.open(`https://huggingface.co/${m.repo_id}`, "_blank")}>
+                        <ExternalLink /> Open
+                      </Button>
+                    </div>
+                  </Card>
+                );
+              })}
             </div>
           )}
         </section>
@@ -276,6 +362,15 @@ export function Browse() {
         </>
       )}
     </>
+  );
+}
+
+function HfMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0">
+      <div className="text-[10px] uppercase tracking-[0.06em] text-fg-faint">{label}</div>
+      <div className="truncate font-mono text-[12.5px] font-medium text-fg">{value}</div>
+    </div>
   );
 }
 

@@ -143,12 +143,32 @@ export interface HfGgufModel {
   gated: boolean;
   last_modified?: string;
   tags: string[];
+  license?: string;
+  base_model?: string;
+  pipeline_tag?: string;
   gguf_files: number;
   quants: string[];
+  files: HfGgufFile[];
+  recommended_quant?: string;
+  recommended_file?: string;
+  recommended_size_gb?: number;
+  fit: "fits" | "offload" | "too_large" | "unknown";
+  vram_gb?: number;
+}
+export interface HfGgufFile {
+  filename: string;
+  quant?: string;
+  size_bytes?: number;
+  size_gb?: number;
+  fit: "fits" | "offload" | "too_large" | "unknown";
+  vram_gb?: number;
+  importable: boolean;
 }
 export interface HfGgufSearchResponse {
   query: string;
   total: number;
+  system_vram?: number | null;
+  ram_gb?: number | null;
   models: HfGgufModel[];
   error?: string;
 }
