@@ -79,6 +79,8 @@ def test_warm_ollama_sends_keep_alive_to_generate_endpoint(monkeypatch):
     assert captured["url"].endswith("/api/generate")
     assert captured["data"]["keep_alive"] == "30m"
     assert captured["data"]["model"] == "m"
+    assert captured["data"]["stream"] is False
+    assert captured["data"]["options"]["num_ctx"] == 4096
     assert result == {"state": "warm", "model": "m", "load_ms": 12.5, "total_ms": 34.0}
 
 
@@ -126,3 +128,4 @@ def test_ollama_chat_sends_keep_alive(monkeypatch, flask_app):
     assert captured["url"].endswith("/api/chat")
     assert captured["data"]["keep_alive"] == "30m"
     assert captured["data"]["model"] == "m"
+    assert captured["data"]["options"]["num_ctx"] == 4096

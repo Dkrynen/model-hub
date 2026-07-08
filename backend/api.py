@@ -33,6 +33,7 @@ app = Flask(__name__, static_folder=_STATIC, static_url_path="", template_folder
 PULL_PROGRESS = {}
 
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+INTERACTIVE_CONTEXT_FALLBACK = 4096
 
 MODEL_WEIGHT_EXTS = {".gguf", ".safetensors", ".bin", ".onnx", ".pt", ".pth"}
 HF_DETAIL_CACHE_TTL_S = 10 * 60
@@ -132,6 +133,29 @@ def _ollama_request(method: str, path: str, json_body: Optional[dict] = None, st
         return {"error": f"Cannot connect to Ollama at {OLLAMA_HOST}: {e.reason}"}
     except Exception as e:
         return {"error": str(e)}
+
+
+def _interactive_context() -> int:
+    """Context used by interactive warm/chat paths.
+
+    The recommendation and calibration stack assumes a 4k default context.
+    Large Ollama models can advertise 128k+ contexts, which is great when a
+    user asks for it, but painful as an implicit chat/warm default.
+    """
+    try:
+        from .config import resolve_config
+        ctx = resolve_config().default_context
+    except Exception:  # noqa: BLE001
+        try:
+            from .cookbook.config import load_config
+            ctx = load_config().default_context
+        except Exception:  # noqa: BLE001
+            ctx = INTERACTIVE_CONTEXT_FALLBACK
+    try:
+        ctx = int(ctx)
+    except (TypeError, ValueError):
+        return INTERACTIVE_CONTEXT_FALLBACK
+    return ctx if ctx > 0 else INTERACTIVE_CONTEXT_FALLBACK
 
 @app.route("/")
 def index():
@@ -372,10 +396,16 @@ def _warm_ollama(model: str) -> dict:
     """Load `model` into VRAM (no generation) and keep it resident. Never raises."""
     import urllib.request
     try:
-        body = json.dumps({"model": model, "keep_alive": "30m"}).encode()
+        body = json.dumps({
+            "model": model,
+            "prompt": "",
+            "stream": False,
+            "keep_alive": "30m",
+            "options": {"num_ctx": _interactive_context()},
+        }).encode()
         req = urllib.request.Request(f"{OLLAMA_HOST}/api/generate", data=body,
                                      headers={"Content-Type": "application/json"}, method="POST")
-        raw = urllib.request.urlopen(req, timeout=120).read()
+        raw = urllib.request.urlopen(req, timeout=600).read()
         try:
             data = json.loads(raw.decode() or "{}")
         except Exception:  # noqa: BLE001 - warming should not fail on a bad metrics body
@@ -420,7 +450,13 @@ def ollama_chat():
         import urllib.request
         import urllib.error
         url = f"{OLLAMA_HOST}/api/chat"
-        body = json.dumps({"model": model, "messages": messages, "stream": True, "keep_alive": "30m"}).encode()
+        body = json.dumps({
+            "model": model,
+            "messages": messages,
+            "stream": True,
+            "keep_alive": "30m",
+            "options": {"num_ctx": _interactive_context()},
+        }).encode()
         req = urllib.request.Request(url, data=body, method="POST")
         req.add_header("Content-Type", "application/json")
         try:
