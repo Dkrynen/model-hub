@@ -99,7 +99,17 @@ export function Chat() {
       let ttftMs: number | undefined;
       for await (const ev of api.chat(model, history as { role: string; content: string }[], ac.signal)) {
         if (ev.error) throw new Error(String(ev.error));
-        const delta = (ev.message as { content?: string } | undefined)?.content ?? "";
+        const message = ev.message as { content?: string; thinking?: string } | undefined;
+        const delta = message?.content ?? "";
+        const thinking = message?.thinking ?? "";
+        if (thinking && !acc) {
+          ttftMs ??= performance.now() - startedAt;
+          setMessages((prev) => {
+            const next = [...prev];
+            next[next.length - 1] = { role: "assistant", content: "Thinking..." };
+            return next;
+          });
+        }
         if (delta) {
           ttftMs ??= performance.now() - startedAt;
           acc += delta;
