@@ -247,4 +247,5 @@ export const api = {
   proBenchmarkHistory: (model: string) => fetch(`/api/pro/benchmark-history?model=${encodeURIComponent(model)}`).then((r) => r.json()),
   proAutopilotLog: () => fetch("/api/pro/autopilot-log").then((r) => r.json()),
   proImportHistory: () => fetch("/api/pro/import-history").then((r) => r.json()),
+  proAgentCockpit: () => fetch("/api/pro/agent-cockpit").then((r) => r.json()),
 };

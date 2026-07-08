@@ -10,6 +10,7 @@ import { InsightsPanel } from "@/components/pro/insights-panel";
 import { AutopilotPanel } from "@/components/pro/autopilot-panel";
 import { BenchmarkPanel } from "@/components/pro/benchmark-panel";
 import { ImportPanel } from "@/components/pro/import-panel";
+import { AgentCockpitPanel } from "@/components/pro/agent-cockpit-panel";
 
 export function Pro() {
   const status = useAsync(() => api.proStatus());
@@ -20,10 +21,10 @@ export function Pro() {
   if (!licensed) {
     return (
       <>
-        <PageHeader title="LAC Pro" subtitle="The tuning cockpit — model tuning, insights, benchmarking, autopilot, and custom imports." />
+        <PageHeader title="LAC Pro" subtitle="Local coding agents, model tuning, insights, benchmarking, autopilot, and custom imports." />
         <Card className="max-w-2xl p-6">
           <div className="flex items-center gap-2 text-sm font-semibold"><Sparkles className="h-4 w-4 text-verdant" /> Unlock the Pro cockpit</div>
-          <p className="mt-2 text-[13px] text-fg-muted">Tune models to your exact hardware with before→after proof, track measured speed over time, and import compatible Hugging Face GGUF or safetensors models. Activate Pro to turn it on.</p>
+          <p className="mt-2 text-[13px] text-fg-muted">Run local coding agents through the CLI, tune models to your exact hardware, track measured speed, and import compatible Hugging Face GGUF or safetensors models. Activate Pro to turn it on.</p>
           <Button className="mt-4" asChild><Link to="/settings">Activate Pro</Link></Button>
         </Card>
       </>
@@ -35,6 +36,7 @@ export function Pro() {
       <PageHeader title="LAC Pro"
         subtitle={`Active · ${status.data?.plan ?? "pro"} · ${status.data?.expires_human ?? ""}`} />
       <div className="grid gap-5">
+        <AgentCockpitPanel />
         <TuneHero />
         <div className="grid gap-5 lg:grid-cols-2">
           <InsightsPanel /> <AutopilotPanel />
