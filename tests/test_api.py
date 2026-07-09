@@ -54,6 +54,7 @@ def test_model_store_doctor_reports_scratch_and_warnings(flask_app, isolated_hom
     monkeypatch.setattr(api_mod, "_default_ollama_models_dir", lambda: models)
     monkeypatch.setattr(api_mod, "_hf_import_scratch_root", lambda: scratch)
     monkeypatch.setattr(api_mod.Path, "home", lambda: tmp_path / "default")
+    monkeypatch.setattr(api_mod.platform, "system", lambda: "Windows")
     monkeypatch.setattr(api_mod, "_disk_usage_payload", lambda path: {
         "free_bytes": 5 * 1024**3,
         "total_bytes": 100 * 1024**3,
