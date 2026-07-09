@@ -7,7 +7,7 @@
 - **Strict release match** - `release_readiness.py --strict-public-match` now requires the latest public tag, installer size, and `SHA256SUMS.txt` entry to match the local app build.
 - **Public copy truth pass** - Tightened README/site Pro claims and the Pro delivery runbook so public-facing docs distinguish verified local automation from Duan-gated release/payment smoke.
 
-## 2.6.4 (2026-07-08, release pending)
+## 2.6.4 (2026-07-09)
 
 - **Model delete fix** - Ollama delete success responses with empty bodies now register as success instead of surfacing a false internal HTTP error.
 - **Delete resilience** - Model deletes now get a longer Ollama timeout so large model cleanup has room to finish.
