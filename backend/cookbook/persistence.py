@@ -67,9 +67,6 @@ def _ensure_db():
         )
     """)
     conn.execute(
-        "CREATE UNIQUE INDEX IF NOT EXISTS idx_staged_pending_unique ON staged_changes(session_id, path) WHERE status = 'pending'"
-    )
-    conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_staged_session ON staged_changes(session_id, status)"
     )
     if not _MIGRATED:
@@ -85,6 +82,14 @@ def _ensure_db():
             pass
         try:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_session_events_session ON session_events(session_id, timestamp)")
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute("DROP INDEX IF EXISTS idx_staged_pending_unique")
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_staged_pending_unique ON staged_changes(session_id, root, path) WHERE status = 'pending'"
+            )
             conn.commit()
         except sqlite3.OperationalError:
             pass
@@ -285,8 +290,8 @@ def stage_change(session_id: str, run_id: str, root: str, path: str, new_content
     conn = _ensure_db()
     now = time.time()
     row = conn.execute(
-        "SELECT id FROM staged_changes WHERE session_id = ? AND path = ? AND status = 'pending'",
-        (session_id, rel),
+        "SELECT id FROM staged_changes WHERE session_id = ? AND root = ? AND path = ? AND status = 'pending'",
+        (session_id, str(base), rel),
     ).fetchone()
     if row:
         change_id = row[0]
@@ -299,7 +304,11 @@ def stage_change(session_id: str, run_id: str, root: str, path: str, new_content
         if target.exists() and target.is_file():
             data = target.read_bytes()
             base_hash = hashlib.sha256(data).hexdigest()
-            old_content = data.decode("utf-8", errors="replace")
+            try:
+                old_content = data.decode("utf-8")
+            except UnicodeDecodeError:
+                conn.close()
+                raise ValueError(f"cannot stage changes to a non-UTF-8 file: {path}")
         else:
             base_hash = None
             old_content = None
