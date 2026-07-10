@@ -458,14 +458,18 @@ class AptApp(App):
             inp.disabled = False
             inp.focus()
 
-    async def _permission_ask(self, agent_name: str, tool_name: str, target: str | None):
-        from backend.tui.permission_modal import PermissionModal
+    async def _permission_ask(self, agent_name: str, tool_name: str, target: str | None, key: str):
+        from backend.agent.runner import AskResult
         from backend.permission import Decision
+        from backend.tui.permission_modal import PermissionModal
+
         modal = PermissionModal(agent_name, tool_name, target)
         result = await self.app.push_screen(modal, wait_for_dismiss=True)
         if isinstance(result, tuple) and result[0] == "allow_always":
-            return result[1]
-        return result if isinstance(result, Decision) else Decision.DENY
+            return AskResult(decision=result[1], remember=(key != "doom_loop"))
+        if isinstance(result, Decision):
+            return AskResult(decision=result)
+        return AskResult(decision=Decision.DENY)
 
     @work(exclusive=False, group="init", exit_on_error=False)
     async def _start_mcp(self) -> None:

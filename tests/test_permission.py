@@ -160,6 +160,7 @@ def test_runner_uses_engine_deny(mock_provider, tool_registry):
 
 def test_runner_ask_callback_allows(mock_provider, tool_registry):
     from backend.agent import AgentRunner, get_agent
+    from backend.agent.runner import AskResult
     from backend.plugin.builtins.tools import TOOL_HANDLERS, TOOL_SCHEMAS
     from backend.provider.base import ChatDelta
 
@@ -169,13 +170,94 @@ def test_runner_ask_callback_allows(mock_provider, tool_registry):
     mock_provider.set_script([ChatDelta(content="", tool_calls=[call], done=True), ChatDelta(content="done", done=True)])
     engine = PermissionEngine(rules=parse_rules({"build": {"list": "ask"}}), project_id="t", store=AlwaysAllowStore())
 
-    async def ask(agent, tool, target):
-        return Decision.ALLOW
+    async def ask(agent, tool, target, key):
+        return AskResult(decision=Decision.ALLOW)
 
     runner = AgentRunner(mock_provider, agent, TOOL_HANDLERS, TOOL_SCHEMAS, permission_engine=engine, on_ask=ask)
     result = asyncio.run(runner.run("list"))
     tool_results = [e for e in result.events if e["type"] == "tool_result"]
     assert tool_results and tool_results[0]["ok"] is True
+
+
+def test_ask_remember_false_does_not_persist(mock_provider, isolated_home):
+    from backend.agent import AgentRunner, get_agent
+    from backend.agent.runner import AskResult
+    from backend.plugin.builtins.tools import TOOL_HANDLERS, TOOL_SCHEMAS
+    from backend.provider.base import ChatDelta
+
+    agent = get_agent("build")
+    agent.model = "mock:1b"
+    call = {"function": {"name": "list_files", "arguments": '{"path":"."}'}}
+    mock_provider.set_script([ChatDelta(content="", tool_calls=[call], done=True), ChatDelta(content="done", done=True)])
+    engine = PermissionEngine(rules=parse_rules({"build": {"list": "ask"}}), project_id="t", store=AlwaysAllowStore())
+    seen_keys = []
+
+    async def ask(agent_name, tool, target, key):
+        seen_keys.append(key)
+        return AskResult(decision=Decision.ALLOW, remember=False)
+
+    runner = AgentRunner(mock_provider, agent, TOOL_HANDLERS, TOOL_SCHEMAS, permission_engine=engine, on_ask=ask, max_iterations=2)
+    asyncio.run(runner.run("list"))
+    assert seen_keys and seen_keys[0] == "list"
+    assert engine.evaluate("build", "list", ".") is Decision.ASK
+
+
+def test_ask_remember_true_persists(mock_provider, isolated_home):
+    from backend.agent import AgentRunner, get_agent
+    from backend.agent.runner import AskResult
+    from backend.plugin.builtins.tools import TOOL_HANDLERS, TOOL_SCHEMAS
+    from backend.provider.base import ChatDelta
+
+    agent = get_agent("build")
+    agent.model = "mock:1b"
+    call = {"function": {"name": "list_files", "arguments": '{"path":"."}'}}
+    mock_provider.set_script([ChatDelta(content="", tool_calls=[call], done=True), ChatDelta(content="done", done=True)])
+    engine = PermissionEngine(rules=parse_rules({"build": {"list": "ask"}}), project_id="t", store=AlwaysAllowStore())
+
+    async def ask(agent_name, tool, target, key):
+        return AskResult(decision=Decision.ALLOW, remember=True)
+
+    runner = AgentRunner(mock_provider, agent, TOOL_HANDLERS, TOOL_SCHEMAS, permission_engine=engine, on_ask=ask, max_iterations=2)
+    asyncio.run(runner.run("list"))
+    assert engine.evaluate("build", "list", ".") is Decision.ALLOW
+
+
+def test_doom_loop_allow_with_remember_never_persists(mock_provider, isolated_home):
+    from backend.agent import AgentRunner, get_agent
+    from backend.agent.runner import AskResult
+    from backend.plugin.builtins.tools import TOOL_HANDLERS, TOOL_SCHEMAS
+    from backend.provider.base import ChatDelta
+
+    agent = get_agent("build")
+    agent.model = "mock:1b"
+    call = {"function": {"name": "list_files", "arguments": '{"path":"."}'}}
+    mock_provider.set_script([ChatDelta(content="", tool_calls=[call], done=True)])
+    store = AlwaysAllowStore()
+    engine = PermissionEngine(rules=parse_rules({"build": {"list": "allow"}}), project_id="t", store=store)
+    doom_asks = []
+
+    async def ask(agent_name, tool, target, key):
+        doom_asks.append(key)
+        return AskResult(decision=Decision.ALLOW, remember=True)
+
+    runner = AgentRunner(mock_provider, agent, TOOL_HANDLERS, TOOL_SCHEMAS, permission_engine=engine, on_ask=ask, max_iterations=4)
+    asyncio.run(runner.run("list"))
+    assert "doom_loop" in doom_asks
+    assert not store.is_allowed("t", "build", "doom_loop", ".")
+    assert engine.evaluate("build", "doom_loop", ".") is Decision.ASK
+
+
+def test_is_dangerous_covers_ssh_paths():
+    from backend.permission.engine import is_dangerous
+
+    assert is_dangerous("write_file", "C:\\Users\\u\\.ssh\\config")
+    assert is_dangerous("write_file", "/home/u/.ssh/authorized_keys")
+    assert is_dangerous("write_file", "keys/id_ed25519")
+    assert is_dangerous("write_file", "backup/id_ecdsa.pub")
+    assert is_dangerous("write_file", "id_rsa")
+    assert is_dangerous("write_file", "prod/.env")
+    assert not is_dangerous("write_file", "src/main.py")
+    assert not is_dangerous("write_file", "docs/ssh-guide.md")
 
 
 def test_runner_uses_bash_permission_key(mock_provider, tool_registry):

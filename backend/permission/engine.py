@@ -146,7 +146,20 @@ def is_dangerous(tool: str, target: str | None) -> bool:
         return any(p in cmd for p in DANGER_PATTERNS)
     if tool in ("write_file", "edit", "apply_patch"):
         p = (target or "").lower().replace("\\", "/")
-        return any(s in p for s in (".bashrc", ".zshrc", ".profile", "id_rsa", ".ssh/authorized_keys", "credentials", ".env"))
+        return any(
+            s in p
+            for s in (
+                ".bashrc",
+                ".zshrc",
+                ".profile",
+                "id_rsa",
+                "id_ed25519",
+                "id_ecdsa",
+                ".ssh/",
+                "credentials",
+                ".env",
+            )
+        )
     return False
 
 

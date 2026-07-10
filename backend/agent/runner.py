@@ -12,7 +12,15 @@ from .base import Agent
 from .permissions import Permissions
 
 ToolHandler = Callable[[dict, dict], str]
-AskCallback = Callable[[str, str, str | None], Awaitable["Decision"]]
+
+
+@dataclass
+class AskResult:
+    decision: "Decision"
+    remember: bool = False
+
+
+AskCallback = Callable[[str, str, str | None, str], Awaitable["AskResult"]]
 
 Event = dict
 
@@ -102,13 +110,14 @@ class AgentRunner:
             return False, f"[permission denied: {tool_name} ({key}) denied for agent '{self.agent.name}']"
         if self.on_ask is not None:
             try:
-                user_decision = await self.on_ask(self.agent.name, tool_name, target)
+                result = await self.on_ask(self.agent.name, tool_name, target, key)
             except Exception as e:
                 return False, f"[permission ask failed: {e}]"
-            if user_decision == Decision.ALLOW:
-                self.permission_engine.remember(self.agent.name, key, target)
+            if result.decision == Decision.ALLOW:
+                if result.remember and key != "doom_loop":
+                    self.permission_engine.remember(self.agent.name, key, target)
                 return True, ""
-            if user_decision == Decision.DENY:
+            if result.decision == Decision.DENY:
                 return False, f"[permission denied by user: {tool_name}]"
             return False, f"[permission denied: {tool_name} (ask returned no decision)]"
         return False, f"[permission denied: {tool_name} ({key}) requires approval (no ask handler)]"
