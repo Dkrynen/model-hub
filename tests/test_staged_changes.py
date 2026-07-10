@@ -138,3 +138,126 @@ def test_stage_change_same_path_different_roots_keyed_separately(isolated_home, 
     assert len(pending) == 2
     roots = {r["root"] for r in pending}
     assert roots == {str(proj_a.resolve()), str(proj_b.resolve())}
+
+
+def test_apply_happy_path_new_file(isolated_home, tmp_path):
+    from backend.cookbook import persistence
+
+    sid = _mk_session()
+    row = persistence.stage_change(sid, "run1", str(tmp_path), "src/new.py", "print('hi')\n")
+    result = persistence.apply_staged_change(row["id"])
+    assert result["status"] == "applied"
+    assert (tmp_path / "src" / "new.py").read_bytes() == b"print('hi')\n"
+    assert persistence.get_staged_change(row["id"])["status"] == "applied"
+
+
+def test_apply_happy_path_existing_file(isolated_home, tmp_path):
+    from backend.cookbook import persistence
+
+    sid = _mk_session()
+    f = tmp_path / "a.txt"
+    f.write_bytes(b"original")
+    row = persistence.stage_change(sid, "run1", str(tmp_path), "a.txt", "changed")
+    result = persistence.apply_staged_change(row["id"])
+    assert result["status"] == "applied"
+    assert f.read_bytes() == b"changed"
+
+
+def test_apply_conflict_when_disk_changed(isolated_home, tmp_path):
+    from backend.cookbook import persistence
+
+    sid = _mk_session()
+    f = tmp_path / "a.txt"
+    f.write_bytes(b"original")
+    row = persistence.stage_change(sid, "run1", str(tmp_path), "a.txt", "changed")
+    f.write_bytes(b"hand-edited meanwhile")
+    result = persistence.apply_staged_change(row["id"])
+    assert result["status"] == "conflict"
+    assert result["base_hash"] == row["base_hash"]
+    assert result["disk_hash"] != row["base_hash"]
+    assert f.read_bytes() == b"hand-edited meanwhile"  # no partial write
+    assert persistence.get_staged_change(row["id"])["status"] == "conflict"
+
+
+def test_apply_conflict_when_new_file_now_exists(isolated_home, tmp_path):
+    from backend.cookbook import persistence
+
+    sid = _mk_session()
+    row = persistence.stage_change(sid, "run1", str(tmp_path), "new.txt", "staged")
+    (tmp_path / "new.txt").write_bytes(b"someone else created this")
+    result = persistence.apply_staged_change(row["id"])
+    assert result["status"] == "conflict"
+    assert result["base_hash"] is None
+
+
+def test_apply_rejects_non_pending_and_unknown(isolated_home, tmp_path):
+    from backend.cookbook import persistence
+
+    sid = _mk_session()
+    row = persistence.stage_change(sid, "run1", str(tmp_path), "a.txt", "x")
+    persistence.set_staged_status(row["id"], "rejected")
+    assert persistence.apply_staged_change(row["id"])["status"] == "not_pending"
+    assert persistence.apply_staged_change("nope")["status"] == "not_found"
+
+
+def test_apply_rejail_blocks_tampered_path(isolated_home, tmp_path):
+    from backend.cookbook import persistence
+
+    sid = _mk_session()
+    row = persistence.stage_change(sid, "run1", str(tmp_path), "a.txt", "x")
+    conn = persistence._ensure_db()
+    conn.execute("UPDATE staged_changes SET path = '../evil.txt' WHERE id = ?", (row["id"],))
+    conn.commit()
+    conn.close()
+    result = persistence.apply_staged_change(row["id"])
+    assert result["status"] == "error"
+    assert not (tmp_path.parent / "evil.txt").exists()
+
+
+def test_revert_restores_original(isolated_home, tmp_path):
+    from backend.cookbook import persistence
+
+    sid = _mk_session()
+    f = tmp_path / "a.txt"
+    f.write_bytes(b"original")
+    row = persistence.stage_change(sid, "run1", str(tmp_path), "a.txt", "changed")
+    persistence.apply_staged_change(row["id"])
+    result = persistence.revert_applied_change(row["id"])
+    assert result["status"] == "reverted"
+    assert f.read_bytes() == b"original"
+    assert persistence.get_staged_change(row["id"])["status"] == "reverted"
+
+
+def test_revert_deletes_applied_new_file(isolated_home, tmp_path):
+    from backend.cookbook import persistence
+
+    sid = _mk_session()
+    row = persistence.stage_change(sid, "run1", str(tmp_path), "new.txt", "staged")
+    persistence.apply_staged_change(row["id"])
+    assert (tmp_path / "new.txt").exists()
+    result = persistence.revert_applied_change(row["id"])
+    assert result["status"] == "reverted"
+    assert not (tmp_path / "new.txt").exists()
+
+
+def test_revert_conflict_when_disk_hand_edited_after_apply(isolated_home, tmp_path):
+    from backend.cookbook import persistence
+
+    sid = _mk_session()
+    f = tmp_path / "a.txt"
+    f.write_bytes(b"original")
+    row = persistence.stage_change(sid, "run1", str(tmp_path), "a.txt", "changed")
+    persistence.apply_staged_change(row["id"])
+    f.write_bytes(b"hand-edited after apply")
+    result = persistence.revert_applied_change(row["id"])
+    assert result["status"] == "conflict"
+    assert f.read_bytes() == b"hand-edited after apply"
+
+
+def test_revert_rejects_non_applied(isolated_home, tmp_path):
+    from backend.cookbook import persistence
+
+    sid = _mk_session()
+    row = persistence.stage_change(sid, "run1", str(tmp_path), "a.txt", "x")
+    assert persistence.revert_applied_change(row["id"])["status"] == "not_applied"
+    assert persistence.revert_applied_change("nope")["status"] == "not_found"

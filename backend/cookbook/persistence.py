@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 import sqlite3
 import time
 import uuid
@@ -355,3 +356,60 @@ def set_staged_status(change_id: str, status: str) -> None:
     )
     conn.commit()
     conn.close()
+
+
+def _atomic_write(target: Path, data: bytes) -> None:
+    """Write via a sibling tmp file + os.replace so a crash never leaves a partial file."""
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.parent / f".{target.name}.lac-tmp"
+    tmp.write_bytes(data)
+    os.replace(tmp, target)
+
+
+def _disk_hash(target: Path) -> Optional[str]:
+    if target.exists() and target.is_file():
+        return hashlib.sha256(target.read_bytes()).hexdigest()
+    return None
+
+
+def apply_staged_change(change_id: str) -> dict:
+    """The only disk-write path for staged changes: re-jail, conflict-check, atomic write."""
+    row = get_staged_change(change_id)
+    if row is None:
+        return {"status": "not_found"}
+    if row["status"] != "pending":
+        return {"status": "not_pending", "current": row["status"]}
+    try:
+        target = _resolve_staged_target(row["root"], row["path"])
+    except ValueError as e:
+        return {"status": "error", "error": str(e)}
+    disk_hash = _disk_hash(target)
+    if disk_hash != row["base_hash"]:
+        set_staged_status(change_id, "conflict")
+        return {"status": "conflict", "disk_hash": disk_hash, "base_hash": row["base_hash"]}
+    _atomic_write(target, row["new_content"].encode("utf-8"))
+    set_staged_status(change_id, "applied")
+    return {"status": "applied", "path": row["path"]}
+
+
+def revert_applied_change(change_id: str) -> dict:
+    """Undo an applied change from the retained snapshot, guarded by a hash of what apply wrote."""
+    row = get_staged_change(change_id)
+    if row is None:
+        return {"status": "not_found"}
+    if row["status"] != "applied":
+        return {"status": "not_applied", "current": row["status"]}
+    try:
+        target = _resolve_staged_target(row["root"], row["path"])
+    except ValueError as e:
+        return {"status": "error", "error": str(e)}
+    expected = hashlib.sha256(row["new_content"].encode("utf-8")).hexdigest()
+    disk_hash = _disk_hash(target)
+    if disk_hash != expected:
+        return {"status": "conflict", "disk_hash": disk_hash, "expected_hash": expected}
+    if row["base_hash"] is None:
+        target.unlink(missing_ok=True)
+    else:
+        _atomic_write(target, (row["old_content"] or "").encode("utf-8"))
+    set_staged_status(change_id, "reverted")
+    return {"status": "reverted", "path": row["path"]}
