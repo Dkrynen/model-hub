@@ -686,6 +686,149 @@ def test_runner_uses_bash_permission_key(mock_provider, tool_registry, isolated_
     assert "(bash) denied" in tool_results[0]["result"]
 
 
+def test_runner_always_ask_tool_overrides_allow(mock_provider, isolated_home):
+    from backend.agent import AgentRunner, get_agent
+    from backend.agent.runner import AskResult
+    from backend.plugin.builtins.tools import TOOL_HANDLERS, TOOL_SCHEMAS
+    from backend.provider.base import ChatDelta
+
+    agent = get_agent("build")
+    agent.model = "mock:1b"
+    call = {"function": {"name": "run_bash", "arguments": '{"command":"echo hi"}'}}
+    mock_provider.set_script([ChatDelta(content="", tool_calls=[call], done=True)])
+    engine = PermissionEngine(
+        rules=parse_rules({"build": {"bash": "allow"}}),
+        project_id="always-ask",
+        store=AlwaysAllowStore(),
+    )
+    asked = []
+    executed = []
+
+    async def ask(agent_name, tool, target, key):
+        asked.append((agent_name, tool, target, key))
+        return AskResult(decision=Decision.ALLOW)
+
+    handlers = {
+        **TOOL_HANDLERS,
+        "run_bash": lambda args, ctx: executed.append(args["command"]) or "ok",
+    }
+    runner = AgentRunner(
+        mock_provider,
+        agent,
+        handlers,
+        TOOL_SCHEMAS,
+        permission_engine=engine,
+        on_ask=ask,
+        always_ask_tools={"run_bash"},
+        max_iterations=1,
+    )
+
+    result = asyncio.run(runner.run("run"))
+
+    assert asked == [("build", "run_bash", "echo hi", "bash")]
+    assert executed == ["echo hi"]
+    assert [e for e in result.events if e["type"] == "tool_result"][0]["ok"] is True
+
+
+def test_runner_always_ask_never_weakens_hard_deny(mock_provider, isolated_home):
+    from backend.agent import AgentRunner, get_agent
+    from backend.agent.runner import AskResult
+    from backend.plugin.builtins.tools import TOOL_HANDLERS, TOOL_SCHEMAS
+    from backend.provider.base import ChatDelta
+
+    agent = get_agent("build")
+    agent.model = "mock:1b"
+    call = {"function": {"name": "run_bash", "arguments": '{"command":"echo hi"}'}}
+    mock_provider.set_script([ChatDelta(content="", tool_calls=[call], done=True)])
+    engine = PermissionEngine(
+        rules=parse_rules({"build": {"bash": "deny"}}),
+        project_id="always-ask-deny",
+        store=AlwaysAllowStore(),
+    )
+    asked = []
+    executed = []
+
+    async def ask(agent_name, tool, target, key):
+        asked.append(target)
+        return AskResult(decision=Decision.ALLOW)
+
+    handlers = {
+        **TOOL_HANDLERS,
+        "run_bash": lambda args, ctx: executed.append(args["command"]) or "ok",
+    }
+    runner = AgentRunner(
+        mock_provider,
+        agent,
+        handlers,
+        TOOL_SCHEMAS,
+        permission_engine=engine,
+        on_ask=ask,
+        always_ask_tools={"run_bash"},
+        max_iterations=1,
+    )
+
+    result = asyncio.run(runner.run("run"))
+
+    assert asked == []
+    assert executed == []
+    tool_result = [e for e in result.events if e["type"] == "tool_result"][0]
+    assert tool_result["ok"] is False
+    assert "(bash) denied" in tool_result["result"]
+
+
+def test_runner_never_remember_tool_ignores_remember_request(
+    mock_provider, isolated_home
+):
+    from backend.agent import AgentRunner, get_agent
+    from backend.agent.runner import AskResult
+    from backend.plugin.builtins.tools import TOOL_HANDLERS, TOOL_SCHEMAS
+    from backend.provider.base import ChatDelta
+
+    agent = get_agent("build")
+    agent.model = "mock:1b"
+    command = "echo safe"
+    call = {
+        "function": {
+            "name": "run_bash",
+            "arguments": json.dumps({"command": command}),
+        }
+    }
+    mock_provider.set_script([ChatDelta(content="", tool_calls=[call], done=True)])
+    store = AlwaysAllowStore()
+    engine = PermissionEngine(
+        rules=parse_rules({"build": {"bash": "ask"}}),
+        project_id="never-remember",
+        store=store,
+    )
+    executed = []
+
+    async def ask(agent_name, tool, target, key):
+        return AskResult(decision=Decision.ALLOW, remember=True)
+
+    handlers = {
+        **TOOL_HANDLERS,
+        "run_bash": lambda args, ctx: executed.append(args["command"]) or "ok",
+    }
+    runner = AgentRunner(
+        mock_provider,
+        agent,
+        handlers,
+        TOOL_SCHEMAS,
+        permission_engine=engine,
+        on_ask=ask,
+        never_remember_tools={"run_bash"},
+        max_iterations=1,
+    )
+
+    result = asyncio.run(runner.run("run"))
+
+    assert executed == [command]
+    assert [e for e in result.events if e["type"] == "tool_result"][0]["ok"] is True
+    assert not store.is_allowed(
+        "never-remember", "build", "bash@run_bash", command
+    )
+
+
 def test_runner_falls_back_to_boolean_permissions_without_engine(mock_provider, tool_registry):
     from backend.agent import AgentRunner, get_agent
     from backend.plugin.builtins.tools import TOOL_HANDLERS, TOOL_SCHEMAS

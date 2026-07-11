@@ -375,6 +375,42 @@ export interface AgentApprovalAnswerResponse {
   ok: true;
 }
 
+export interface AgentRunCancelResponse {
+  ok: true;
+}
+
+export interface AgentSandboxStatus {
+  backend: "docker";
+  available: boolean;
+  code: string;
+  message: string;
+  tasks: string[];
+  image?: string | null;
+  network: "none";
+}
+
+export interface SandboxTaskApprovalTarget {
+  kind: "sandbox_task";
+  name: string;
+  argv: string[];
+  root: string;
+  image: string;
+  image_id: string;
+  timeout_seconds: number;
+  network: "none";
+  staged_overlay_digest: string;
+  config_digest: string;
+  staged_changes: SandboxTaskStagedChangeTarget[];
+}
+
+export interface SandboxTaskStagedChangeTarget {
+  id: string;
+  path: string;
+  base_hash: string | null;
+  updated_at: number;
+  content_hash: string;
+}
+
 export type StagedChangeStatus =
   | "pending"
   | "applied"

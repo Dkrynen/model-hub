@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from backend.cookbook import persistence
+from backend.project_paths import validate_relative_project_path
 
 ToolHandler = Callable[[dict, dict], str]
 
@@ -26,7 +27,13 @@ def _jail(args: dict, ctx: dict, default_path: str = "") -> tuple[Path, str] | s
         rel = target.relative_to(base)
     except ValueError:
         return f"error: path outside workspace: {target}"
-    return base, rel.as_posix()
+    rel_posix = rel.as_posix()
+    if rel_posix == ".":
+        return base, rel_posix
+    try:
+        return base, validate_relative_project_path(rel_posix)
+    except ValueError as exc:
+        return f"error: {exc}"
 
 
 def build_staged_handlers(

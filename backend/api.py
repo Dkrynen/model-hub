@@ -23,6 +23,8 @@ from flask import Flask, Response, jsonify, request, stream_with_context
 
 from . import self_invoke
 from .agent import Agent, AgentRunner, FULL_PERMISSIONS, READONLY_PERMISSIONS
+from .agent.runner import PreparedToolCall
+from .agent.sandbox import DockerTaskBroker, SandboxError, probe_project_sandbox
 from .agent.staging import build_staged_handlers
 from .cookbook import proc
 from .cookbook.config import load_config
@@ -200,6 +202,13 @@ class _PersistedAgentEvent:
     payload: dict
 
 
+@dataclass(frozen=True)
+class _TerminalAgentEvent:
+    """Queue wrapper for a terminal event journaled independently by its route."""
+
+    payload: dict
+
+
 class _PersistedRunEventSink:
     """Persist handler-originated events before publishing them to SSE."""
 
@@ -220,6 +229,7 @@ class _AgentRun:
     queue: "queue.Queue"
     session_id: str
     created_at: float
+    cancel_event: threading.Event = field(default_factory=threading.Event, repr=False)
     answer: object | None = None       # Decision | None; None at timeout/disconnect => DENY
     remember: bool = False
     pending_ask: dict | None = None
@@ -227,6 +237,9 @@ class _AgentRun:
     thread: threading.Thread | None = None
     approval_token: str = field(default_factory=lambda: secrets.token_urlsafe(32), repr=False)
     cancel_reason: str | None = None
+    cancel_announced: bool = False
+    cancel_journaled: bool = False
+    cancel_journal_in_progress: bool = False
     state_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
 
@@ -255,8 +268,23 @@ def _persist_run_event(run: _AgentRun, event: dict) -> None:
     add_session_event(run.session_id, str(event["type"]), event)
 
 
-def _put_run_item(run: _AgentRun, item: object) -> bool:
-    """Bound each run's event buffer and stop waiting once the client is gone."""
+def _put_run_item(run: _AgentRun, item: object, *, terminal: bool = False) -> bool:
+    """Bound a run buffer while guaranteeing room for terminal cancellation."""
+
+    if terminal:
+        # A cancelled producer cannot rely on the browser draining a full
+        # queue. Drop the oldest now-irrelevant SSE item until the durable
+        # cancellation event or sentinel fits; persisted events remain in the
+        # session journal even when displaced from the wire.
+        while True:
+            try:
+                run.queue.put_nowait(item)
+                return True
+            except queue.Full:
+                try:
+                    run.queue.get_nowait()
+                except queue.Empty:
+                    continue
 
     while not run.cancelled:
         try:
@@ -272,6 +300,10 @@ def _ask_is_rememberable(tool_name: str, target: object, key: str) -> bool:
 
     from .permission.engine import is_dangerous
 
+    if tool_name == "run_task":
+        # A named task can execute different project code as staged content
+        # evolves, even though its argv is fixed. It must always be allow-once.
+        return False
     return bool(
         key != "doom_loop"
         and target is not None
@@ -346,7 +378,12 @@ def _make_web_ask(run_id: str, run: _AgentRun):
                 run.ask_event.set()
             pending["claimed"] = True
 
-        def commit_answer(remember_action, rollback_action, grant_id):
+        def commit_answer(
+            remember_action,
+            rollback_action,
+            grant_id,
+            remember_allowed=True,
+        ):
             resolution = None
             failure = None
             failure_reason = None
@@ -385,7 +422,11 @@ def _make_web_ask(run_id: str, run: _AgentRun):
                     if run.cancel_reason == "answer_ack_timeout":
                         actual = Decision.DENY
                     requested_remember = bool(
-                        run.remember and actual is Decision.ALLOW and key != "doom_loop"
+                        remember_allowed
+                        and rememberable
+                        and run.remember
+                        and actual is Decision.ALLOW
+                        and key != "doom_loop"
                     )
                     actual_remember = requested_remember
                     if requested_remember:
@@ -1345,7 +1386,7 @@ _WEB_AGENT_TOOLS = {
     "explore": ["read_file", "list_files", "web_search"],
 }
 _WEB_AGENT_PROMPTS = {
-    "build": "You are the LAC Workbench build agent for one explicit project. You can inspect files and propose write_file changes, which are staged for separate user review and apply. You cannot run shell commands; do not claim tests, builds, commands, or staged changes have already run or changed files on disk.",
+    "build": "You are the LAC Workbench build agent for one explicit project. You can inspect files and propose write_file changes, which are staged for separate user review and apply. You cannot run shell commands on the host. Do not claim tests, builds, commands, or staged changes have run unless a provided tool result proves it.",
     "plan": "You are the LAC Workbench plan agent. You have read-only access. Inspect context, reason carefully, and propose concrete implementation steps. Never claim you changed files.",
     "explore": "You are the LAC Workbench explore agent. You have read-only code and web search access. Gather context, summarize findings, and cite the files or sources you used.",
 }
@@ -1359,27 +1400,90 @@ _PERSISTED_AGENT_EVENT_TYPES = {
     "ask_remember_started",
     "ask_resolved",
     "ask_timeout",
+    "run_cancelled",
     "staged_change",
 }
+_LATE_SANDBOX_CLEANUP_PREFIXES = (
+    "error: docker_cleanup_failed:",
+    "error: docker_ownership_refused:",
+    "error: docker_ownership_unverified:",
+    "error: sandbox_internal_error:",
+    "error: snapshot_cleanup_failed:",
+)
 
 
-def _web_agent(agent_name: str, model: str) -> Agent:
+def _is_bounded_late_sandbox_cleanup_failure(event: object) -> bool:
+    if not isinstance(event, dict):
+        return False
+    result = event.get("result")
+    return bool(
+        event.get("type") == "tool_result"
+        and event.get("name") == "run_task"
+        and event.get("ok") is False
+        and isinstance(result, str)
+        and len(result) <= 66_000
+        and result.startswith(_LATE_SANDBOX_CLEANUP_PREFIXES)
+    )
+
+
+def _run_task_schema(task_names: tuple[str, ...]) -> dict:
+    return {
+        "type": "function",
+        "function": {
+            "name": "run_task",
+            "description": (
+                "Run one operator-configured verification task in a disposable, "
+                "network-disabled Docker snapshot. Container writes are discarded."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "enum": list(task_names),
+                        "description": "Exact configured task name.",
+                    }
+                },
+                "required": ["name"],
+                "additionalProperties": False,
+            },
+        },
+    }
+
+
+def _web_agent(
+    agent_name: str,
+    model: str,
+    *,
+    sandbox_tasks: tuple[str, ...] = (),
+) -> Agent:
     is_build = agent_name == "build"
     permissions = copy.deepcopy(FULL_PERMISSIONS if is_build else READONLY_PERMISSIONS)
     if is_build:
         permissions.bash.run = False
+    tools = list(_WEB_AGENT_TOOLS[agent_name])
+    prompt = _WEB_AGENT_PROMPTS[agent_name]
+    if is_build and sandbox_tasks:
+        tools.append("run_task")
+        names = ", ".join(sandbox_tasks)
+        prompt += (
+            " You may run only these operator-configured sandbox tasks through "
+            f"run_task: {names}. Each task requires one-time approval, runs with "
+            "network disabled against a disposable snapshot including pending "
+            "staged edits, and cannot change the real project."
+        )
     return Agent(
         name=agent_name,
         type=agent_name,
         description=(
-            "Project-scoped web build agent with staged file writes and no shell access"
+            "Project-scoped web build agent with staged writes and optional named Docker tasks"
             if is_build
             else f"Read-only web {agent_name} agent"
         ),
         model=model,
-        system_prompt=_WEB_AGENT_PROMPTS[agent_name],
+        system_prompt=prompt,
         permissions=permissions,
-        tools=list(_WEB_AGENT_TOOLS[agent_name]),
+        tools=tools,
         raw={"source": "web_builtin"},
     )
 
@@ -1416,6 +1520,36 @@ def _resolve_agent_cwd(raw: object) -> Path:
     if not resolved.exists() or not resolved.is_dir():
         raise ValueError(f"Project root not found: {resolved}")
     return resolved
+
+
+def _require_exact_configured_project_root(cwd: Path) -> None:
+    """Reject a descendant when an ancestor owns the applied .apt config."""
+
+    from .config import find_project_root
+
+    configured_root = find_project_root(cwd)
+    if configured_root is None:
+        return
+    configured_root = configured_root.resolve()
+    if cwd != configured_root:
+        raise ValueError(
+            f"Build cwd must match the configured project root: {configured_root}"
+        )
+
+
+@app.route("/api/agent/sandbox")
+def agent_sandbox_capability():
+    if not _is_trusted_local_approval_request():
+        return jsonify({"error": "Agent sandbox status is available only on this machine"}), 403
+    raw_cwd = request.args.get("cwd")
+    if not isinstance(raw_cwd, str) or not raw_cwd.strip():
+        return jsonify({"error": "Project cwd required"}), 400
+    try:
+        cwd = _resolve_agent_cwd(raw_cwd)
+        _require_exact_configured_project_root(cwd)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    return jsonify(probe_project_sandbox(cwd).to_dict())
 
 
 _AGENT_SKIP_ENTRIES = {"node_modules", "__pycache__"}
@@ -1620,21 +1754,13 @@ def agent_chat():
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
     if agent_name == "build":
-        from .config import find_project_root
-
-        configured_root = find_project_root(cwd)
-        if configured_root is not None:
-            configured_root = configured_root.resolve()
-            if cwd != configured_root:
-                return jsonify(
-                    {
-                        "error": (
-                            "Build cwd must match the configured project root: "
-                            f"{configured_root}"
-                        ),
-                        "configured_root": str(configured_root),
-                    }
-                ), 400
+        try:
+            _require_exact_configured_project_root(cwd)
+        except ValueError as e:
+            configured_root = str(e).split(": ", 1)[-1]
+            return jsonify(
+                {"error": str(e), "configured_root": configured_root}
+            ), 400
 
     workspace = str(data.get("workspace") or "").strip()
     session_id_raw = data.get("session_id")
@@ -1670,7 +1796,19 @@ def agent_chat():
     max_iterations = max(1, min(max_iterations, 12))
 
     try:
-        agent = _web_agent(agent_name, model)
+        sandbox_capability = (
+            probe_project_sandbox(cwd) if agent_name == "build" else None
+        )
+        sandbox_tasks = (
+            sandbox_capability.tasks
+            if sandbox_capability is not None and sandbox_capability.available
+            else ()
+        )
+        agent = _web_agent(
+            agent_name,
+            model,
+            sandbox_tasks=sandbox_tasks,
+        )
         provider = default_provider()
         chat_options = _agent_chat_options(provider)
         run_id = uuid.uuid4().hex
@@ -1681,7 +1819,11 @@ def agent_chat():
             created_at=time.time(),
         )
         handlers = TOOL_HANDLERS
+        schemas = list(TOOL_SCHEMAS)
         permission_engine = None
+        tool_preparers = {}
+        always_ask_tools = set()
+        never_remember_tools = set()
         if agent_name == "build":
             permission_engine = PermissionEngine.from_config(
                 start_dir=cwd,
@@ -1694,16 +1836,45 @@ def agent_chat():
                 event_queue=_PersistedRunEventSink(run),
             )
             handlers.pop("run_bash", None)
+            if sandbox_tasks:
+                broker = DockerTaskBroker(
+                    cwd,
+                    session_id,
+                    run_id,
+                    run.cancel_event,
+                    capability=sandbox_capability,
+                )
+
+                def prepare_run_task(args: dict, _ctx: dict) -> PreparedToolCall:
+                    if set(args) != {"name"} or not isinstance(args.get("name"), str):
+                        raise SandboxError(
+                            "invalid_task_request",
+                            "run_task accepts only one configured task name",
+                        )
+                    frozen = broker.prepare_task(args["name"])
+                    return PreparedToolCall(
+                        permission_target=frozen.permission_target,
+                        approval_target=frozen.approval_target,
+                        execute=frozen.execute_outcome,
+                    )
+
+                tool_preparers["run_task"] = prepare_run_task
+                always_ask_tools.add("run_task")
+                never_remember_tools.add("run_task")
+                schemas.append(_run_task_schema(sandbox_tasks))
         runner = AgentRunner(
             provider,
             agent,
             handlers,
-            TOOL_SCHEMAS,
-            ctx={"cwd": str(cwd)},
+            schemas,
+            ctx={"cwd": str(cwd), "cancel_event": run.cancel_event},
             max_iterations=max_iterations,
             chat_options=chat_options,
             permission_engine=permission_engine,
             on_ask=_make_web_ask(run_id, run),
+            tool_preparers=tool_preparers,
+            always_ask_tools=always_ask_tools,
+            never_remember_tools=never_remember_tools,
         )
     except Exception:
         if created_session:
@@ -1721,8 +1892,14 @@ def agent_chat():
             stream = runner.run_stream(message, runner_history)
             try:
                 async for ev in stream:
+                    if run.cancelled and run.cancel_reason == "user_cancelled":
+                        if _is_bounded_late_sandbox_cleanup_failure(ev):
+                            _persist_run_event(run, ev)
+                        break
                     ev_type = ev.get("type")
                     if ev_type in _PERSISTED_AGENT_EVENT_TYPES:
+                        if run.cancelled and run.cancel_reason == "user_cancelled":
+                            break
                         # Audit at the source, before the SSE socket can drop.
                         _persist_run_event(run, ev)
                         _put_run_item(run, _PersistedAgentEvent(dict(ev)))
@@ -1736,14 +1913,16 @@ def agent_chat():
         try:
             asyncio.run(_drive())
         except Exception as e:
-            err = {"type": "error", "message": str(e)}
-            try:
-                _persist_run_event(run, err)
-                _put_run_item(run, _PersistedAgentEvent(err))
-            except Exception:
-                _put_run_item(run, err)
+            if not (run.cancelled and run.cancel_reason == "user_cancelled"):
+                err = {"type": "error", "message": str(e)}
+                try:
+                    _persist_run_event(run, err)
+                    _put_run_item(run, _PersistedAgentEvent(err))
+                except Exception:
+                    _put_run_item(run, err)
         finally:
-            _put_run_item(run, _RUN_SENTINEL)
+            with run.state_lock:
+                _put_run_item(run, _RUN_SENTINEL, terminal=True)
             if run.cancelled:
                 with _AGENT_RUNS_LOCK:
                     if _AGENT_RUNS.get(run_id) is run:
@@ -1794,8 +1973,10 @@ def agent_chat():
                 if queued is _RUN_SENTINEL:
                     break
 
-                already_persisted = isinstance(queued, _PersistedAgentEvent)
-                ev = queued.payload if already_persisted else queued
+                skip_persist = isinstance(
+                    queued, (_PersistedAgentEvent, _TerminalAgentEvent)
+                )
+                ev = queued.payload if skip_persist else queued
 
                 ev_type = ev.get("type")
                 if ev_type == "delta":
@@ -1816,10 +1997,12 @@ def agent_chat():
                         workspace=workspace,
                     )
                     saved_done = True
-                elif ev_type in _PERSISTED_AGENT_EVENT_TYPES and not already_persisted:
+                elif ev_type in _PERSISTED_AGENT_EVENT_TYPES and not skip_persist:
                     add_session_event(session_id, str(ev_type), ev)
 
                 yield _agent_sse(ev)
+                if ev_type == "run_cancelled":
+                    break
         except GeneratorExit:
             disconnected = True
             raise
@@ -1831,7 +2014,9 @@ def agent_chat():
             # cancel-by-disconnect AND normal completion both land here
             with run.state_lock:
                 run.cancelled = True
-                run.cancel_reason = "disconnect"
+                if run.cancel_reason is None:
+                    run.cancel_reason = "disconnect"
+                run.cancel_event.set()
                 run.ask_event.set()
             if worker_started:
                 worker.join(timeout=WORKER_JOIN_TIMEOUT)
@@ -1888,6 +2073,71 @@ def _is_trusted_local_approval_request() -> bool:
         if not is_local_host(origin_host):
             return False
     return True
+
+
+@app.route("/api/agent/runs/<run_id>/cancel", methods=["POST"])
+def agent_run_cancel(run_id):
+    """Cancel exactly one capability-bound local agent run."""
+
+    if not _is_trusted_local_approval_request():
+        return jsonify({"error": "Agent cancellation is accepted only from this machine"}), 403
+
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"error": "JSON object required"}), 400
+    approval_token = data.get("approval_token")
+    if not isinstance(approval_token, str) or not approval_token:
+        return jsonify({"error": "approval_token required"}), 400
+
+    with _AGENT_RUNS_LOCK:
+        run = _AGENT_RUNS.get(run_id)
+    if run is None:
+        return jsonify({"error": "Run not found"}), 404
+    if not secrets.compare_digest(approval_token, run.approval_token):
+        return jsonify({"error": "Invalid approval capability"}), 403
+
+    cancel_event = {
+        "type": "run_cancelled",
+        "run_id": run_id,
+        "reason": "user_cancelled",
+    }
+    should_journal = False
+    with run.state_lock:
+        run.cancelled = True
+        run.cancel_reason = "user_cancelled"
+        run.cancel_event.set()
+        run.ask_event.set()
+        if not run.cancel_announced:
+            # Explicit cancellation supersedes every buffered wire item,
+            # including a stale completion sentinel. Persisted items remain in
+            # the audit journal; the browser receives cancellation next.
+            while True:
+                try:
+                    run.queue.get_nowait()
+                except queue.Empty:
+                    break
+            _put_run_item(
+                run,
+                _TerminalAgentEvent(cancel_event),
+                terminal=True,
+            )
+            run.cancel_announced = True
+        if not run.cancel_journaled and not run.cancel_journal_in_progress:
+            run.cancel_journal_in_progress = True
+            should_journal = True
+    if should_journal:
+        try:
+            _persist_run_event(run, cancel_event)
+        except Exception:
+            # Stop is a safety control: an unavailable audit store must never
+            # leave the task running. A later idempotent request may retry.
+            with run.state_lock:
+                run.cancel_journal_in_progress = False
+        else:
+            with run.state_lock:
+                run.cancel_journaled = True
+                run.cancel_journal_in_progress = False
+    return jsonify({"ok": True, "run_id": run_id})
 
 
 @app.route("/api/agent/runs/<run_id>/answer", methods=["POST"])

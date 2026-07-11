@@ -341,8 +341,9 @@ def test_build_runner_is_project_scoped_and_staged_while_read_modes_stay_read_on
     assert not build["agent"].permissions.can_run_bash()
     assert build["agent"].tools == ["read_file", "write_file", "list_files"]
     assert "staged" in build["agent"].description.lower()
-    assert "shell" in build["agent"].description.lower()
-    assert "cannot run shell commands" in build["agent"].system_prompt.lower()
+    assert "docker tasks" in build["agent"].description.lower()
+    assert "cannot run shell commands on the host" in build["agent"].system_prompt.lower()
+    assert "run_task" not in build["agent"].tools
 
     for read_mode in (plan, explore):
         assert read_mode["permission_engine"] is None
@@ -351,6 +352,217 @@ def test_build_runner_is_project_scoped_and_staged_while_read_modes_stay_read_on
         assert not read_mode["agent"].permissions.can_run_bash()
     assert plan["agent"].tools == ["read_file", "list_files"]
     assert explore["agent"].tools == ["read_file", "list_files", "web_search"]
+
+
+def test_build_exposes_only_named_sandbox_task_when_exact_capability_is_ready(
+    flask_app, isolated_home, monkeypatch, tmp_path
+):
+    import backend.api as api_mod
+
+    captured: dict = {}
+
+    class Capability:
+        available = True
+        tasks = ("lint", "test")
+        image = "example/lac@sha256:" + ("a" * 64)
+
+    class Broker:
+        def __init__(self, root, session_id, run_id, cancel_event, *, capability):
+            captured["broker"] = {
+                "root": root,
+                "session_id": session_id,
+                "run_id": run_id,
+                "cancel_event": cancel_event,
+                "capability": capability,
+            }
+
+        def prepare_task(self, name):  # pragma: no cover - runner is captured
+            raise AssertionError(name)
+
+    class FakeRunner:
+        def __init__(self, provider, agent, handlers, schemas, **kwargs):
+            captured["agent"] = agent
+            captured["handlers"] = handlers
+            captured["schemas"] = schemas
+            captured["kwargs"] = kwargs
+
+        async def run_stream(self, user_text, history=None):
+            yield {"type": "done", "content": "ready", "messages": [], "iterations": 1}
+
+    monkeypatch.setattr(api_mod, "probe_project_sandbox", lambda root: Capability())
+    monkeypatch.setattr(api_mod, "DockerTaskBroker", Broker)
+    monkeypatch.setattr(api_mod, "AgentRunner", FakeRunner)
+    monkeypatch.setattr(api_mod, "default_provider", lambda: object())
+
+    project = tmp_path / "configured"
+    project.mkdir()
+    (project / ".apt").mkdir()
+    (project / ".apt" / "apt.jsonc").write_text("{}", encoding="utf-8")
+    response = flask_app.test_client().post(
+        "/api/agent/chat",
+        json={"agent": "build", "model": "mock:1b", "message": "verify", "cwd": str(project)},
+    )
+    assert response.status_code == 200
+    _events(response)
+
+    assert captured["agent"].tools == [
+        "read_file",
+        "write_file",
+        "list_files",
+        "run_task",
+    ]
+    assert "run_bash" not in captured["handlers"]
+    assert captured["agent"].permissions.can_run_bash() is False
+    schema = [
+        item for item in captured["schemas"]
+        if item["function"]["name"] == "run_task"
+    ][0]
+    assert schema["function"]["parameters"]["properties"]["name"]["enum"] == [
+        "lint",
+        "test",
+    ]
+    assert set(captured["kwargs"]["tool_preparers"]) == {"run_task"}
+    assert captured["kwargs"]["always_ask_tools"] == {"run_task"}
+    assert captured["kwargs"]["never_remember_tools"] == {"run_task"}
+    assert captured["broker"]["root"] == project.resolve()
+    assert captured["broker"]["cancel_event"] is captured["kwargs"]["ctx"]["cancel_event"]
+
+
+def test_run_task_approval_is_never_rememberable_even_for_bounded_details():
+    import backend.api as api_mod
+
+    assert api_mod._ask_is_rememberable(
+        "run_task",
+        {
+            "kind": "sandbox_task",
+            "name": "test",
+            "argv": ["python", "-m", "pytest"],
+        },
+        "task",
+    ) is False
+
+
+def test_real_build_run_task_freezes_then_executes_only_after_allow_once(
+    flask_app, isolated_home, monkeypatch, tmp_path, mock_provider
+):
+    import backend.api as api_mod
+    from backend.provider.base import ChatDelta
+
+    executed: list[str] = []
+    approval_target = {
+        "kind": "sandbox_task",
+        "name": "test",
+        "argv": ["python", "-m", "pytest", "-q"],
+        "root": "will-be-replaced",
+        "image": "example/lac@sha256:" + ("a" * 64),
+        "image_id": "sha256:" + ("b" * 64),
+        "timeout_seconds": 120,
+        "network": "none",
+        "staged_overlay_digest": "c" * 64,
+        "config_digest": "d" * 64,
+        "staged_changes": [],
+    }
+
+    class Capability:
+        available = True
+        tasks = ("test",)
+        image = approval_target["image"]
+
+    class Frozen:
+        permission_target = "test"
+
+        def __init__(self, root):
+            self.approval_target = {**approval_target, "root": str(root)}
+
+        def execute_outcome(self):
+            executed.append("test")
+            return True, "[exit 0]\n2 passed"
+
+    class Broker:
+        def __init__(self, root, session_id, run_id, cancel_event, *, capability):
+            self.root = root
+
+        def prepare_task(self, name):
+            assert name == "test"
+            return Frozen(self.root)
+
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".apt").mkdir()
+    (project / ".apt" / "apt.jsonc").write_text(
+        json.dumps({"permission": {"build": {"task": "allow"}}}),
+        encoding="utf-8",
+    )
+    mock_provider.set_script(
+        [
+            ChatDelta(
+                content="",
+                tool_calls=[
+                    {
+                        "function": {
+                            "name": "run_task",
+                            "arguments": json.dumps({"name": "test"}),
+                        }
+                    }
+                ],
+                done=True,
+            )
+        ]
+    )
+    monkeypatch.setattr(api_mod, "probe_project_sandbox", lambda root: Capability())
+    monkeypatch.setattr(api_mod, "DockerTaskBroker", Broker)
+    monkeypatch.setattr(api_mod, "default_provider", lambda: mock_provider)
+
+    response = flask_app.test_client().post(
+        "/api/agent/chat",
+        json={
+            "agent": "build",
+            "model": "mock:1b",
+            "message": "run verification",
+            "cwd": str(project),
+            "max_iterations": 1,
+        },
+    )
+    events = _iter_events(response)
+    run_id = approval_token = None
+    ask = None
+    for event in events:
+        if event["type"] == "run":
+            run_id = event["run_id"]
+            approval_token = event["approval_token"]
+        elif event["type"] == "ask":
+            ask = event
+            break
+
+    assert ask is not None
+    assert ask["tool"] == "run_task"
+    assert ask["key"] == "task"
+    assert ask["rememberable"] is False
+    assert ask["target"] == {**approval_target, "root": str(project.resolve())}
+    assert executed == []
+
+    answer = flask_app.test_client().post(
+        f"/api/agent/runs/{run_id}/answer",
+        json={
+            "ask_id": ask["ask_id"],
+            "approval_token": approval_token,
+            "decision": "allow",
+            "remember": True,
+        },
+    )
+    assert answer.status_code == 200
+    remaining = list(events)
+    assert executed == ["test"]
+    resolved = [event for event in remaining if event["type"] == "ask_resolved"][0]
+    assert resolved["decision"] == "allow"
+    assert resolved["remember"] is False
+    tool_result = [event for event in remaining if event["type"] == "tool_result"][0]
+    assert tool_result == {
+        "type": "tool_result",
+        "name": "run_task",
+        "ok": True,
+        "result": "[exit 0]\n2 passed",
+    }
 
 
 class _BuildWriteRunner:
@@ -650,6 +862,45 @@ def test_agent_chat_disconnect_cancels_worker(flask_app, isolated_home, monkeypa
     while time.time() < deadline and api_mod._AGENT_RUNS:
         time.sleep(0.05)
     assert api_mod._AGENT_RUNS == {}  # registry entry dropped by the finally block
+
+
+def test_agent_chat_disconnect_preserves_existing_cancel_reason(
+    flask_app, isolated_home, monkeypatch, tmp_path
+):
+    import backend.api as api_mod
+
+    class FakeRunner:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def run_stream(self, user_text, history=None):
+            yield {"type": "done", "content": "unused", "messages": [], "iterations": 1}
+
+    monkeypatch.setattr(api_mod, "AgentRunner", FakeRunner)
+    monkeypatch.setattr(api_mod, "default_provider", lambda: object())
+    project = tmp_path / "project"
+    project.mkdir()
+
+    resp = flask_app.test_client().post(
+        "/api/agent/chat",
+        json={"agent": "plan", "model": "mock:1b", "message": "go", "cwd": str(project)},
+    )
+    events = _iter_events(resp)
+    run_event = next(ev for ev in events if ev["type"] == "run")
+    run = api_mod._AGENT_RUNS[run_event["run_id"]]
+
+    try:
+        cancelled = flask_app.test_client().post(
+            f"/api/agent/runs/{run_event['run_id']}/cancel",
+            json={"approval_token": run_event["approval_token"]},
+        )
+        assert cancelled.status_code == 200
+        assert run.cancel_reason == "user_cancelled"
+    finally:
+        resp.response.close()
+
+    assert run.cancel_reason == "user_cancelled"
+    assert run_event["run_id"] not in api_mod._AGENT_RUNS
 
 
 def test_agent_chat_disconnect_after_first_event_cleans_registry(
@@ -1792,3 +2043,404 @@ def test_staged_change_is_audited_even_after_sse_disconnect(
         time.sleep(0.01)
     stored = persistence.list_session_events(session_id)
     assert [e["type"] for e in stored] == ["staged_change"]
+
+
+def test_agent_run_cancel_requires_exact_capability_and_sets_shared_cancel_event(
+    flask_app, isolated_home
+):
+    import queue
+    import threading
+
+    import backend.api as api_mod
+    from backend.cookbook import persistence
+
+    session_id = persistence.create_session(name="cancel", model="mock:1b")
+    run = api_mod._AgentRun(
+        ask_event=threading.Event(),
+        queue=queue.Queue(),
+        session_id=session_id,
+        created_at=time.time(),
+    )
+    with api_mod._AGENT_RUNS_LOCK:
+        api_mod._AGENT_RUNS["cancel-run"] = run
+
+    try:
+        wrong = flask_app.test_client().post(
+            "/api/agent/runs/cancel-run/cancel",
+            json={"approval_token": "wrong", "container_id": "client-must-not-control"},
+        )
+        assert wrong.status_code == 403
+        assert not run.cancelled
+
+        cancelled = flask_app.test_client().post(
+            "/api/agent/runs/cancel-run/cancel",
+            json={"approval_token": run.approval_token},
+        )
+        assert cancelled.status_code == 200
+        assert cancelled.get_json() == {"ok": True, "run_id": "cancel-run"}
+        assert run.cancelled is True
+        assert run.cancel_reason == "user_cancelled"
+        assert run.ask_event.is_set()
+        assert run.cancel_event.is_set()
+
+        repeated = flask_app.test_client().post(
+            "/api/agent/runs/cancel-run/cancel",
+            json={"approval_token": run.approval_token},
+        )
+        assert repeated.status_code == 200
+
+        cancelled_events = [
+            event
+            for event in persistence.list_session_events(session_id)
+            if event["type"] == "run_cancelled"
+        ]
+        assert [event["payload"] for event in cancelled_events] == [
+            {
+                "type": "run_cancelled",
+                "run_id": "cancel-run",
+                "reason": "user_cancelled",
+            }
+        ]
+    finally:
+        with api_mod._AGENT_RUNS_LOCK:
+            api_mod._AGENT_RUNS.pop("cancel-run", None)
+
+
+def test_agent_run_cancel_replaces_queued_backlog_and_stale_sentinel(
+    flask_app, isolated_home
+):
+    import queue
+    import threading
+
+    import backend.api as api_mod
+    from backend.cookbook import persistence
+
+    session_id = persistence.create_session(name="cancel backlog", model="mock:1b")
+    run = api_mod._AgentRun(
+        ask_event=threading.Event(),
+        queue=queue.Queue(maxsize=4),
+        session_id=session_id,
+        created_at=time.time(),
+    )
+    run.queue.put(
+        api_mod._PersistedAgentEvent(
+            {"type": "tool_result", "name": "old", "result": "old"}
+        )
+    )
+    run.queue.put(api_mod._RUN_SENTINEL)
+    with api_mod._AGENT_RUNS_LOCK:
+        api_mod._AGENT_RUNS["cancel-run"] = run
+
+    try:
+        response = flask_app.test_client().post(
+            "/api/agent/runs/cancel-run/cancel",
+            json={"approval_token": run.approval_token},
+        )
+        assert response.status_code == 200
+        queued = run.queue.get_nowait()
+        assert isinstance(queued, api_mod._TerminalAgentEvent)
+        assert queued.payload == {
+            "type": "run_cancelled",
+            "run_id": "cancel-run",
+            "reason": "user_cancelled",
+        }
+        with pytest.raises(queue.Empty):
+            run.queue.get_nowait()
+    finally:
+        with api_mod._AGENT_RUNS_LOCK:
+            api_mod._AGENT_RUNS.pop("cancel-run", None)
+
+
+@pytest.mark.parametrize(
+    "late_result",
+    [
+        "error: docker_cleanup_failed: container still present",
+        "error: docker_ownership_refused: container labels changed",
+        "error: sandbox_internal_error: The local task sandbox failed safely",
+    ],
+)
+def test_agent_run_cancel_emits_terminal_event_and_audits_late_cleanup_failure(
+    flask_app, isolated_home, monkeypatch, tmp_path, late_result
+):
+    import asyncio as aio
+
+    import backend.api as api_mod
+    from backend.cookbook import persistence
+
+    monkeypatch.setattr(api_mod, "HEARTBEAT_INTERVAL", 0.05)
+
+    class CancelAwareRunner:
+        def __init__(self, *args, **kwargs):
+            self.cancel_event = kwargs["ctx"]["cancel_event"]
+
+        async def run_stream(self, user_text, history=None):
+            yield {"type": "delta", "content": "working"}
+            await aio.get_running_loop().run_in_executor(None, self.cancel_event.wait)
+            yield {
+                "type": "tool_result",
+                "name": "run_task",
+                "ok": False,
+                "result": late_result,
+            }
+            yield {"type": "staged_change", "change_id": "must-not-persist", "path": "late.py"}
+            yield {"type": "done", "content": "must not escape", "messages": [], "iterations": 1}
+
+    monkeypatch.setattr(api_mod, "AgentRunner", CancelAwareRunner)
+    monkeypatch.setattr(api_mod, "default_provider", lambda: object())
+    project = tmp_path / "project"
+    project.mkdir()
+
+    response = flask_app.test_client().post(
+        "/api/agent/chat",
+        json={"agent": "plan", "model": "mock:1b", "message": "go", "cwd": str(project)},
+    )
+    events = _iter_events(response)
+    session_id = run_id = approval_token = None
+    for event in events:
+        if event["type"] == "session":
+            session_id = event["session_id"]
+        elif event["type"] == "run":
+            run_id = event["run_id"]
+            approval_token = event["approval_token"]
+        elif event["type"] == "delta":
+            break
+
+    cancelled = flask_app.test_client().post(
+        f"/api/agent/runs/{run_id}/cancel",
+        json={"approval_token": approval_token},
+    )
+    assert cancelled.status_code == 200
+
+    remaining = list(events)
+    assert [event for event in remaining if event["type"] == "run_cancelled"] == [
+        {
+            "type": "run_cancelled",
+            "run_id": run_id,
+            "reason": "user_cancelled",
+        }
+    ]
+    assert all(event["type"] != "done" for event in remaining)
+    assert run_id not in api_mod._AGENT_RUNS
+    stored = persistence.list_session_events(session_id)
+    assert [event["payload"] for event in stored if event["type"] == "run_cancelled"] == [
+        {
+            "type": "run_cancelled",
+            "run_id": run_id,
+            "reason": "user_cancelled",
+        }
+    ]
+    assert [
+        event["payload"]
+        for event in stored
+        if event["type"] == "tool_result" and event["payload"].get("name") == "run_task"
+    ] == [
+        {
+            "type": "tool_result",
+            "name": "run_task",
+            "ok": False,
+            "result": late_result,
+        }
+    ]
+    assert all(event["type"] != "staged_change" for event in stored)
+
+
+def test_agent_run_cancel_is_loopback_only(flask_app, isolated_home):
+    import queue
+    import threading
+
+    import backend.api as api_mod
+
+    run = api_mod._AgentRun(
+        ask_event=threading.Event(),
+        queue=queue.Queue(),
+        session_id="cancel-session",
+        created_at=time.time(),
+    )
+    with api_mod._AGENT_RUNS_LOCK:
+        api_mod._AGENT_RUNS["cancel-run"] = run
+    try:
+        response = flask_app.test_client().post(
+            "/api/agent/runs/cancel-run/cancel",
+            json={"approval_token": run.approval_token},
+            environ_base={"REMOTE_ADDR": "192.0.2.44"},
+        )
+        assert response.status_code == 403
+        assert not run.cancelled
+        assert not run.cancel_event.is_set()
+    finally:
+        with api_mod._AGENT_RUNS_LOCK:
+            api_mod._AGENT_RUNS.pop("cancel-run", None)
+
+
+def test_agent_run_cancel_still_signals_when_journal_is_unavailable(
+    flask_app, isolated_home, monkeypatch
+):
+    import queue
+    import threading
+
+    import backend.api as api_mod
+
+    run = api_mod._AgentRun(
+        ask_event=threading.Event(),
+        queue=queue.Queue(),
+        session_id="cancel-session",
+        created_at=time.time(),
+    )
+    with api_mod._AGENT_RUNS_LOCK:
+        api_mod._AGENT_RUNS["cancel-run"] = run
+
+    def fail_journal(*_args, **_kwargs):
+        raise OSError(r"C:\Users\secret-owner\broken-audit.db")
+
+    monkeypatch.setattr(api_mod, "_persist_run_event", fail_journal)
+    try:
+        response = flask_app.test_client().post(
+            "/api/agent/runs/cancel-run/cancel",
+            json={"approval_token": run.approval_token},
+        )
+
+        assert response.status_code == 200
+        assert response.get_json() == {"ok": True, "run_id": "cancel-run"}
+        assert run.cancelled is True
+        assert run.cancel_reason == "user_cancelled"
+        assert run.cancel_event.is_set()
+        assert run.ask_event.is_set()
+        assert run.cancel_journaled is False
+    finally:
+        with api_mod._AGENT_RUNS_LOCK:
+            api_mod._AGENT_RUNS.pop("cancel-run", None)
+
+
+def test_agent_run_cancel_signals_before_slow_journal_finishes(
+    flask_app, isolated_home, monkeypatch
+):
+    import queue
+    import threading
+
+    import backend.api as api_mod
+
+    run = api_mod._AgentRun(
+        ask_event=threading.Event(),
+        queue=queue.Queue(),
+        session_id="cancel-session",
+        created_at=time.time(),
+    )
+    with api_mod._AGENT_RUNS_LOCK:
+        api_mod._AGENT_RUNS["cancel-run"] = run
+    journal_entered = threading.Event()
+    release_journal = threading.Event()
+    response_holder = {}
+
+    def slow_journal(*_args, **_kwargs):
+        journal_entered.set()
+        assert release_journal.wait(timeout=5)
+
+    def request_cancel():
+        response_holder["response"] = flask_app.test_client().post(
+            "/api/agent/runs/cancel-run/cancel",
+            json={"approval_token": run.approval_token},
+        )
+
+    monkeypatch.setattr(api_mod, "_persist_run_event", slow_journal)
+    worker = threading.Thread(target=request_cancel)
+    worker.start()
+    try:
+        assert journal_entered.wait(timeout=5)
+        assert run.cancelled is True
+        assert run.cancel_event.is_set()
+        assert run.ask_event.is_set()
+    finally:
+        release_journal.set()
+        worker.join(timeout=5)
+        with api_mod._AGENT_RUNS_LOCK:
+            api_mod._AGENT_RUNS.pop("cancel-run", None)
+    assert response_holder["response"].status_code == 200
+
+
+def test_agent_run_cancel_ends_stream_even_when_runner_ignores_cancel(
+    flask_app, isolated_home, monkeypatch, tmp_path
+):
+    import asyncio as aio
+    import threading
+
+    import backend.api as api_mod
+
+    release_runner = threading.Event()
+
+    class IgnoringRunner:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def run_stream(self, user_text, history=None):
+            yield {"type": "delta", "content": "working"}
+            await aio.get_running_loop().run_in_executor(None, release_runner.wait)
+            yield {"type": "staged_change", "change_id": "late", "path": "late.py"}
+
+    monkeypatch.setattr(api_mod, "AgentRunner", IgnoringRunner)
+    monkeypatch.setattr(api_mod, "default_provider", lambda: object())
+    monkeypatch.setattr(api_mod, "WORKER_JOIN_TIMEOUT", 0.05)
+    project = tmp_path / "project"
+    project.mkdir()
+    response = flask_app.test_client().post(
+        "/api/agent/chat",
+        json={"agent": "plan", "model": "mock:1b", "message": "go", "cwd": str(project)},
+    )
+    events = _iter_events(response)
+    run_event = None
+    for event in events:
+        if event["type"] == "run":
+            run_event = event
+        elif event["type"] == "delta":
+            break
+    assert run_event is not None
+
+    cancelled = flask_app.test_client().post(
+        f"/api/agent/runs/{run_event['run_id']}/cancel",
+        json={"approval_token": run_event["approval_token"]},
+    )
+    assert cancelled.status_code == 200
+    remaining = list(events)
+    assert [event["type"] for event in remaining] == ["run_cancelled"]
+
+    release_runner.set()
+    deadline = time.time() + 5
+    while time.time() < deadline and run_event["run_id"] in api_mod._AGENT_RUNS:
+        time.sleep(0.01)
+    assert run_event["run_id"] not in api_mod._AGENT_RUNS
+
+
+def test_agent_sandbox_capability_requires_root_and_returns_bounded_public_state(
+    flask_app, isolated_home, monkeypatch, tmp_path
+):
+    import backend.api as api_mod
+
+    project = tmp_path / "project"
+    project.mkdir()
+    captured: dict = {}
+
+    class Capability:
+        def to_dict(self):
+            return {
+                "backend": "docker",
+                "available": False,
+                "code": "docker_daemon_unavailable",
+                "message": "Docker Desktop is installed but not running.",
+                "tasks": [],
+                "image": None,
+                "network": "none",
+            }
+
+    def probe(root):
+        captured["root"] = root
+        return Capability()
+
+    monkeypatch.setattr(api_mod, "probe_project_sandbox", probe, raising=False)
+    missing = flask_app.test_client().get("/api/agent/sandbox")
+    assert missing.status_code == 400
+
+    response = flask_app.test_client().get(
+        "/api/agent/sandbox", query_string={"cwd": str(project)}
+    )
+    assert response.status_code == 200
+    assert captured["root"] == project.resolve()
+    assert response.get_json() == Capability().to_dict()

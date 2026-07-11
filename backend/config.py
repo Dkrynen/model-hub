@@ -5,9 +5,9 @@ import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from backend.cookbook.config import (
     CONFIG_DIR as USER_CONFIG_DIR,
@@ -42,6 +42,113 @@ class MCPConfig(BaseModel):
     servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
 
 
+_SANDBOX_TASK_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$")
+_SANDBOX_CONTEXT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+_SANDBOX_LOCAL_IMAGE_ID = re.compile(r"^sha256:[0-9a-fA-F]{64}$")
+_SANDBOX_PINNED_IMAGE = re.compile(
+    r"^[A-Za-z0-9][^\s@]*@sha256:[0-9a-fA-F]{64}$"
+)
+
+
+class SandboxTaskConfig(BaseModel):
+    """One operator-authored command exposed to the model by name only."""
+
+    model_config = {"extra": "forbid"}
+
+    argv: list[str] = Field(min_length=1, max_length=64)
+    timeout_seconds: int = Field(default=120, ge=1, le=300)
+
+    @field_validator("argv")
+    @classmethod
+    def _validate_argv(cls, argv: list[str]) -> list[str]:
+        total = 0
+        for index, value in enumerate(argv):
+            if not isinstance(value, str):
+                raise ValueError("sandbox task argv entries must be strings")
+            if not value or len(value) > 4096:
+                raise ValueError("sandbox task argv entries must contain 1-4096 characters")
+            if "\x00" in value or any(ord(ch) < 32 for ch in value):
+                raise ValueError("sandbox task argv entries cannot contain control characters")
+            if index == 0 and value.startswith("-"):
+                raise ValueError("sandbox task executable cannot begin with '-'")
+            total += len(value)
+        if total > 32768:
+            raise ValueError("sandbox task argv exceeds 32768 characters")
+        return argv
+
+
+class SandboxConfig(BaseModel):
+    """Docker-only, local-first task sandbox configuration."""
+
+    model_config = {"extra": "forbid"}
+
+    engine: Literal["docker"] = "docker"
+    context: str
+    image: str
+    snapshot_include: list[str] = Field(min_length=1, max_length=128)
+    tasks: dict[str, SandboxTaskConfig] = Field(min_length=1, max_length=64)
+
+    @field_validator("context")
+    @classmethod
+    def _validate_context(cls, context: str) -> str:
+        if not _SANDBOX_CONTEXT_NAME.fullmatch(context):
+            raise ValueError("sandbox context must be a bounded Docker context name")
+        return context
+
+    @field_validator("image")
+    @classmethod
+    def _validate_image(cls, image: str) -> str:
+        if len(image) > 512 or not (
+            _SANDBOX_LOCAL_IMAGE_ID.fullmatch(image)
+            or _SANDBOX_PINNED_IMAGE.fullmatch(image)
+        ):
+            raise ValueError(
+                "sandbox image must be digest-pinned or an exact sha256 image id"
+            )
+        return image
+
+    @field_validator("snapshot_include")
+    @classmethod
+    def _validate_snapshot_include(cls, patterns: list[str]) -> list[str]:
+        total = 0
+        forbidden_catchalls = {"*", "**", "**/*"}
+        for pattern in patterns:
+            if (
+                not isinstance(pattern, str)
+                or not pattern
+                or len(pattern) > 256
+                or pattern in forbidden_catchalls
+                or pattern.startswith("/")
+                or "\\" in pattern
+                or "\x00" in pattern
+                or any(ord(character) < 32 for character in pattern)
+            ):
+                raise ValueError(
+                    "sandbox snapshot patterns must be bounded relative POSIX globs"
+                )
+            parts = pattern.split("/")
+            if any(part in ("", ".", "..") for part in parts):
+                raise ValueError(
+                    "sandbox snapshot patterns cannot contain empty or parent segments"
+                )
+            total += len(pattern)
+        if total > 16384:
+            raise ValueError("sandbox snapshot include policy is too large")
+        if len(set(patterns)) != len(patterns):
+            raise ValueError("sandbox snapshot patterns must be unique")
+        return patterns
+
+    @field_validator("tasks")
+    @classmethod
+    def _validate_task_names(
+        cls, tasks: dict[str, SandboxTaskConfig]
+    ) -> dict[str, SandboxTaskConfig]:
+        invalid = [name for name in tasks if not _SANDBOX_TASK_NAME.fullmatch(name)]
+        if invalid:
+            raise ValueError(f"invalid sandbox task name: {invalid[0]!r}")
+        return tasks
+
+
 class AgentRef(BaseModel):
     name: str
     type: str = "build"
@@ -67,6 +174,7 @@ class AptProjectConfig(BaseModel):
     plugins: dict[str, dict] = Field(default_factory=dict)
     permission: dict[str, Any] = Field(default_factory=dict)
     update: dict[str, Any] = Field(default_factory=dict)
+    sandbox: SandboxConfig | None = None
 
 
 def strip_jsonc(text: str) -> str:

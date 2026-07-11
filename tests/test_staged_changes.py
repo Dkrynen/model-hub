@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
+import pytest
+
 
 def _mk_session():
     from backend.cookbook.persistence import create_session
@@ -55,8 +57,6 @@ def test_stage_change_upsert_keeps_original_snapshot(isolated_home, tmp_path):
 
 
 def test_stage_change_jail_escape_raises(isolated_home, tmp_path):
-    import pytest
-
     from backend.cookbook import persistence
 
     sid = _mk_session()
@@ -64,6 +64,29 @@ def test_stage_change_jail_escape_raises(isolated_home, tmp_path):
         persistence.stage_change(sid, "run1", str(tmp_path), "../outside.txt", "x")
     with pytest.raises(ValueError):
         persistence.stage_change(sid, "run1", str(tmp_path), ".", "x")
+
+
+@pytest.mark.parametrize(
+    "invalid_path",
+    [
+        "src/app.py:payload",
+        "NUL",
+        "aux.txt",
+        "COM1.log",
+        "src/trailing.",
+        "src/trailing ",
+        "src/bad?.txt",
+    ],
+)
+def test_stage_change_refuses_nonportable_windows_aliases(
+    isolated_home, tmp_path, invalid_path
+):
+    from backend.cookbook import persistence
+
+    sid = _mk_session()
+    with pytest.raises(ValueError):
+        persistence.stage_change(sid, "run1", str(tmp_path), invalid_path, "x")
+    assert persistence.list_staged_changes(sid) == []
 
 
 def test_list_staged_changes_filters(isolated_home, tmp_path):
@@ -214,6 +237,27 @@ def test_apply_rejail_blocks_tampered_path(isolated_home, tmp_path):
     assert not (tmp_path.parent / "evil.txt").exists()
 
 
+@pytest.mark.parametrize("tampered_path", ["a.txt:payload", "NUL", "src/trailing."])
+def test_apply_rejail_blocks_tampered_windows_alias(
+    isolated_home, tmp_path, tampered_path
+):
+    from backend.cookbook import persistence
+
+    sid = _mk_session()
+    row = persistence.stage_change(sid, "run1", str(tmp_path), "a.txt", "x")
+    conn = persistence._ensure_db()
+    conn.execute(
+        "UPDATE staged_changes SET path = ? WHERE id = ?",
+        (tampered_path, row["id"]),
+    )
+    conn.commit()
+    conn.close()
+
+    result = persistence.apply_staged_change(row["id"])
+
+    assert result["status"] == "error"
+
+
 def test_revert_restores_original(isolated_home, tmp_path):
     from backend.cookbook import persistence
 
@@ -330,6 +374,10 @@ def test_staged_write_jail_and_size_cap(isolated_home, tmp_path):
     ctx = {"cwd": str(tmp_path)}
 
     assert handlers["write_file"]({"path": "../evil.txt", "content": "x"}, ctx).startswith("error:")
+    for invalid_path in ("src/app.py:payload", "NUL", "src/trailing."):
+        assert handlers["write_file"](
+            {"path": invalid_path, "content": "x"}, ctx
+        ).startswith("error:")
     big = "x" * (2 * 1024 * 1024 + 1)
     assert "2 MB" in handlers["write_file"]({"path": "big.txt", "content": big}, ctx)
 

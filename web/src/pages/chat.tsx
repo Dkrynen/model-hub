@@ -34,6 +34,13 @@ import {
 } from "@/lib/agent-approval";
 import type { ApprovalAction, PendingApproval } from "@/lib/agent-approval";
 import {
+  approvalMayBeRemembered,
+  cancelRunThenAbort,
+  parseRunTaskTarget,
+  sandboxPresentation,
+  shouldCommitSandboxStatus,
+} from "@/lib/agent-command";
+import {
   STAGED_SNAPSHOT_LABEL,
   approvalLockKey,
   approvalDecisionIntent,
@@ -55,6 +62,7 @@ import type {
 } from "@/lib/agent-workbench";
 import type {
   PsResponse,
+  AgentSandboxStatus,
   SessionDetail,
   SessionEvent,
   SessionMessage,
@@ -89,6 +97,13 @@ interface WorkbenchEvent {
   path?: string;
   decision?: string;
   remember?: boolean;
+}
+
+interface SandboxCheckState {
+  root: string;
+  loading: boolean;
+  status: AgentSandboxStatus | null;
+  error: string | null;
 }
 
 const SUGGESTIONS = [
@@ -134,6 +149,12 @@ export function Chat() {
   const [warming, setWarming] = useState(false);
   const [lastStats, setLastStats] = useState<ChatStats | null>(null);
   const [projectRoot, setProjectRoot] = useState(() => localStorage.getItem(PROJECT_ROOT_KEY) ?? "");
+  const [sandboxCheck, setSandboxCheck] = useState<SandboxCheckState>({
+    root: "",
+    loading: false,
+    status: null,
+    error: null,
+  });
   const [approval, setApproval] = useState(initialApprovalState);
   const [stagedChanges, setStagedChanges] = useState<StagedChangeSummary[]>([]);
   const [selectedChange, setSelectedChange] = useState<StagedChangeDetail | null>(null);
@@ -149,6 +170,9 @@ export function Chat() {
   const sessionGenerationRef = useRef(0);
   const sessionLoadGenerationRef = useRef(0);
   const stagedRequestSequenceRef = useRef(0);
+  const sandboxRequestSequenceRef = useRef(0);
+  const projectRootRef = useRef(projectRoot);
+  const modeRef = useRef<Mode>(mode);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const applyApprovalAction = (action: ApprovalAction) => {
@@ -271,6 +295,7 @@ export function Chat() {
       sessionGenerationRef.current += 1;
       sessionLoadGenerationRef.current += 1;
       stagedRequestSequenceRef.current += 1;
+      sandboxRequestSequenceRef.current += 1;
       abortRef.current?.abort();
       abortRef.current = null;
       approvalRef.current = initialApprovalState;
@@ -288,6 +313,52 @@ export function Chat() {
     if (projectRoot.trim()) localStorage.setItem(PROJECT_ROOT_KEY, projectRoot.trim());
     else localStorage.removeItem(PROJECT_ROOT_KEY);
   }, [projectRoot]);
+
+  useEffect(() => {
+    const root = projectRoot.trim();
+    const sequence = ++sandboxRequestSequenceRef.current;
+    if (mode !== "build" || !root) {
+      setSandboxCheck({ root: "", loading: false, status: null, error: null });
+      return;
+    }
+
+    const request = { root, sequence };
+    setSandboxCheck({ root, loading: true, status: null, error: null });
+    const timer = window.setTimeout(() => {
+      api.agentSandbox(root)
+        .then((status) => {
+          if (
+            !mountedRef.current ||
+            modeRef.current !== "build" ||
+            !shouldCommitSandboxStatus(
+              projectRootRef.current.trim(),
+              sandboxRequestSequenceRef.current,
+              request
+            )
+          ) return;
+          setSandboxCheck({ root, loading: false, status, error: null });
+        })
+        .catch((error) => {
+          if (
+            !mountedRef.current ||
+            modeRef.current !== "build" ||
+            !shouldCommitSandboxStatus(
+              projectRootRef.current.trim(),
+              sandboxRequestSequenceRef.current,
+              request
+            )
+          ) return;
+          setSandboxCheck({
+            root,
+            loading: false,
+            status: null,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+    }, 250);
+
+    return () => window.clearTimeout(timer);
+  }, [mode, projectRoot]);
 
   useEffect(() => {
     if (model) return;
@@ -528,7 +599,7 @@ export function Chat() {
             tool: ev.tool,
             target: ev.target,
             key: ev.key,
-            rememberable: ev.rememberable === true,
+            rememberable: approvalMayBeRemembered(ev.tool, ev.rememberable === true),
           });
           appendRunEvent(eventFromRaw(ev), generation);
         } else if (
@@ -801,7 +872,11 @@ export function Chat() {
 
   const stop = () => {
     const sessionId = activeSessionRef.current;
-    invalidateActiveRun();
+    cancelRunThenAbort(
+      approvalRef.current.run,
+      (runId, approvalToken) => api.cancelAgentRun(runId, approvalToken),
+      invalidateActiveRun
+    );
     if (sessionId) void refreshStagedChanges(sessionId, true);
   };
   const clear = () => {
@@ -859,26 +934,44 @@ export function Chat() {
 
           <div className="border-b border-line p-3">
             <div className="mb-2 flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2 text-[12px] font-semibold uppercase tracking-[0.08em] text-fg-faint">
+              <label
+                htmlFor="workbench-project-root"
+                className="flex items-center gap-2 text-[12px] font-semibold uppercase tracking-[0.08em] text-fg-faint"
+              >
                 <Code2 className="h-3.5 w-3.5" /> Project
-              </div>
+              </label>
               <Badge variant={buildRootMissing ? "warning" : "outline"}>
                 {buildRootMissing ? "Required for Build" : "Root"}
               </Badge>
             </div>
             <Input
+              id="workbench-project-root"
               value={projectRoot}
-              onChange={(e) => setProjectRoot(e.target.value)}
+              onChange={(e) => {
+                projectRootRef.current = e.target.value;
+                setProjectRoot(e.target.value);
+              }}
               placeholder="C:\\Users\\User\\repos\\model-hub"
               disabled={streaming}
               aria-invalid={buildRootMissing}
+              aria-describedby={buildRootMissing ? "workbench-project-root-error" : undefined}
               className="h-8 text-[12.5px]"
             />
             {buildRootMissing && (
-              <div className="mt-1.5 text-[11px] leading-relaxed text-warning">
+              <div id="workbench-project-root-error" className="mt-1.5 text-[11px] leading-relaxed text-warning">
                 Build is disabled until a project root is set.
               </div>
             )}
+            <div
+              id="workbench-sandbox-status"
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+            >
+              {mode === "build" && projectRoot.trim() && (
+                <SandboxStatusPanel root={projectRoot.trim()} check={sandboxCheck} />
+              )}
+            </div>
           </div>
 
           <div className="flex min-h-0 flex-1 flex-col">
@@ -947,7 +1040,10 @@ export function Chat() {
                   mode={item}
                   active={mode === item.id}
                   disabled={workbenchControlsAreDisabled}
-                  onClick={() => setMode(item.id)}
+                  onClick={() => {
+                    modeRef.current = item.id;
+                    setMode(item.id);
+                  }}
                 />
               ))}
             </div>
@@ -1103,6 +1199,77 @@ export function Chat() {
   );
 }
 
+function SandboxStatusPanel({
+  root,
+  check,
+}: {
+  root: string;
+  check: SandboxCheckState;
+}) {
+  const status = check.root === root ? check.status : null;
+  const loading = check.root === root && check.loading;
+  const error = check.root === root ? check.error : null;
+  const presentation = status ? sandboxPresentation(status) : null;
+
+  return (
+    <div className="mt-3 rounded border border-line bg-panel-2 p-2.5">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-fg-faint">
+          Task sandbox
+        </span>
+        <Badge variant={presentation?.tone ?? "neutral"}>
+          {loading ? "Checking" : error ? "Status unavailable" : presentation?.label ?? "Checking"}
+        </Badge>
+      </div>
+      <div className="mt-1.5 break-all text-[10.5px] text-fg-faint">Root: {root}</div>
+      {loading && (
+        <div className="mt-1.5 text-[11px] leading-relaxed text-fg-muted">
+          Checking the configured Docker sandbox for this exact root.
+        </div>
+      )}
+      {error && (
+        <>
+          <div className="mt-1.5 text-[11px] leading-relaxed text-warning">{error}</div>
+          <div className="mt-1 text-[10.5px] leading-relaxed text-fg-faint">
+            Staged editing remains available. Verification tasks are unavailable.
+          </div>
+        </>
+      )}
+      {status && presentation && (
+        <>
+          <div className="mt-1.5 text-[11px] leading-relaxed text-fg-muted">
+            {presentation.detail}
+          </div>
+          {status.available ? (
+            <>
+              <div
+                className="mt-2 flex max-h-24 flex-wrap gap-1 overflow-y-auto pr-1"
+                role="list"
+                aria-label="Configured sandbox tasks"
+                tabIndex={0}
+              >
+                {status.tasks.map((task) => (
+                  <span key={task} role="listitem">
+                    <Badge variant="outline">{task}</Badge>
+                  </span>
+                ))}
+              </div>
+              {status.image && (
+                <div className="mt-1.5 break-all text-[10.5px] text-fg-faint">Image: {status.image}</div>
+              )}
+              <div className="mt-1 text-[10.5px] text-fg-faint">Network disabled</div>
+            </>
+          ) : (
+            <div className="mt-1 text-[10.5px] leading-relaxed text-fg-faint">
+              Staged editing remains available. Verification tasks are unavailable.
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 function ApprovalCard({
   approval,
   onDecision,
@@ -1111,6 +1278,10 @@ function ApprovalCard({
   onDecision: (intent: ApprovalDecisionIntent) => void;
 }) {
   const disabled = approval.submitting || approval.submitted;
+  const runTask = approval.tool === "run_task";
+  const runTaskDetails = runTask ? parseRunTaskTarget(approval.target) : null;
+  const allowDisabled = disabled || (runTask && runTaskDetails === null);
+  const invalidDetailsId = "run-task-approval-invalid-details";
   return (
     <div className="rounded-lg border border-warning/40 bg-warning-soft/40 p-3" role="alert">
       <div className="flex items-center justify-between gap-2">
@@ -1119,14 +1290,24 @@ function ApprovalCard({
         </div>
         <Badge variant="warning">{approval.key}</Badge>
       </div>
-      <div className="mt-2 text-[13px] font-medium text-fg">{approval.tool}</div>
-      <pre className="mt-1 max-h-28 overflow-auto whitespace-pre-wrap break-words rounded border border-line bg-panel px-2 py-1.5 text-[11.5px] leading-relaxed text-fg-muted">
-        {formatApprovalTarget(approval.target)}
-      </pre>
-      {approval.tool === "run_bash" && (
-        <div className="mt-2 text-[11px] leading-relaxed text-warning">
-          Shell commands execute directly after approval; their side effects are not staged.
-        </div>
+      <div className="mt-2 text-[13px] font-medium text-fg">
+        {runTask ? "Sandbox verification task" : approval.tool}
+      </div>
+      {runTask ? (
+        runTaskDetails ? (
+          <RunTaskApprovalDetails details={runTaskDetails} />
+        ) : (
+          <div
+            id={invalidDetailsId}
+            className="mt-2 rounded border border-danger/40 bg-danger-soft p-2 text-[11px] leading-relaxed text-danger"
+          >
+            Task details are incomplete. Approval is disabled.
+          </div>
+        )
+      ) : (
+        <pre className="mt-1 max-h-28 overflow-auto whitespace-pre-wrap break-words rounded border border-line bg-panel px-2 py-1.5 text-[11.5px] leading-relaxed text-fg-muted">
+          {formatApprovalTarget(approval.target)}
+        </pre>
       )}
       {approval.error && (
         <div className="mt-2 text-[11.5px] leading-relaxed text-danger">{approval.error}</div>
@@ -1146,12 +1327,13 @@ function ApprovalCard({
         <Button
           size="sm"
           variant="secondary"
-          disabled={disabled}
+          disabled={allowDisabled}
+          aria-describedby={runTask && runTaskDetails === null ? invalidDetailsId : undefined}
           onClick={() => onDecision(approvalDecisionIntent(approval, "allow", false))}
         >
           Allow once
         </Button>
-        {approval.rememberable && (
+        {!runTask && approval.rememberable && (
           <Button
             size="sm"
             disabled={disabled}
@@ -1161,9 +1343,82 @@ function ApprovalCard({
           </Button>
         )}
       </div>
-      {!approval.rememberable && (
+      {(runTask || !approval.rememberable) && (
         <div className="mt-2 text-[11px] text-fg-faint">This request cannot be remembered.</div>
       )}
+    </div>
+  );
+}
+
+function RunTaskApprovalDetails({
+  details,
+}: {
+  details: NonNullable<ReturnType<typeof parseRunTaskTarget>>;
+}) {
+  const rows = [
+    ["Task", details.name],
+    ["Argv", JSON.stringify(details.argv)],
+    ["Project root", details.root],
+    ["Image", details.image],
+    ["Resolved image", details.imageId],
+    ["Timeout", `${details.timeoutSeconds} seconds`],
+    ["Staged overlay", details.stagedOverlayDigest],
+    ["Config digest", details.configDigest],
+  ];
+  return (
+    <div className="mt-2 rounded border border-line bg-panel p-2">
+      <div
+        className="max-h-48 overflow-y-auto pr-1"
+        tabIndex={0}
+        aria-label="Sandbox task details"
+      >
+        <dl className="space-y-1.5">
+          {rows.map(([label, value]) => (
+            <div key={label}>
+              <dt className="text-[10px] font-semibold uppercase tracking-[0.07em] text-fg-faint">{label}</dt>
+              <dd className="break-all text-[11px] leading-relaxed text-fg-muted">{value}</dd>
+            </div>
+          ))}
+        </dl>
+        <div className="mt-3 border-t border-line pt-2">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.07em] text-fg-faint">
+            Staged changes ({details.stagedChanges.length})
+          </div>
+          {details.stagedChanges.length === 0 ? (
+            <div className="mt-1 text-[11px] text-fg-muted">No staged rows in this snapshot.</div>
+          ) : (
+            <div className="mt-1.5 space-y-2">
+              {details.stagedChanges.map((change, index) => (
+                <div key={`${change.id}:${index}`} className="rounded border border-line bg-panel-2 p-2">
+                  <div className="break-all text-[11px] font-medium text-fg">Path: {change.path}</div>
+                  <dl className="mt-1 space-y-1 text-[10.5px] text-fg-muted">
+                    <div>
+                      <dt className="inline font-semibold text-fg-faint">ID: </dt>
+                      <dd className="inline break-all">{change.id}</dd>
+                    </div>
+                    <div>
+                      <dt className="inline font-semibold text-fg-faint">Revision: </dt>
+                      <dd className="inline break-all">{String(change.updatedAt)}</dd>
+                    </div>
+                    <div>
+                      <dt className="inline font-semibold text-fg-faint">Base hash: </dt>
+                      <dd className="inline break-all">{change.baseHash ?? "none (new file)"}</dd>
+                    </div>
+                    <div>
+                      <dt className="inline font-semibold text-fg-faint">Content hash: </dt>
+                      <dd className="inline break-all">{change.contentHash}</dd>
+                    </div>
+                  </dl>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+      <div className="mt-2 rounded border border-line bg-panel-2 px-2 py-1.5 text-[10.5px] leading-relaxed text-fg-muted">
+        <div>Network disabled</div>
+        <div>Disposable snapshot; real project unchanged</div>
+      </div>
     </div>
   );
 }

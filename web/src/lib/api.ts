@@ -27,6 +27,82 @@ async function readErrorBody(res: Response): Promise<unknown> {
   }
 }
 
+const SANDBOX_STATUS_KEYS = [
+  "available",
+  "backend",
+  "code",
+  "image",
+  "message",
+  "network",
+  "tasks",
+] as const;
+const SANDBOX_TASK_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/;
+const SANDBOX_LOCAL_IMAGE_ID_PATTERN = /^sha256:[0-9a-fA-F]{64}$/;
+const SANDBOX_PINNED_IMAGE_PATTERN = /^[A-Za-z0-9][^\s@]*@sha256:[0-9a-fA-F]{64}$/;
+
+function invalidSandboxStatus(): never {
+  throw new Error("Invalid agent sandbox status response");
+}
+
+function exactImageReference(value: unknown): value is string {
+  return typeof value === "string" && value.length <= 512 && (
+    SANDBOX_LOCAL_IMAGE_ID_PATTERN.test(value) ||
+    SANDBOX_PINNED_IMAGE_PATTERN.test(value)
+  );
+}
+
+export function decodeAgentSandboxStatus(
+  value: unknown
+): import("./types").AgentSandboxStatus {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return invalidSandboxStatus();
+  }
+  const record = value as Record<string, unknown>;
+  const keys = Object.keys(record).sort();
+  const hasKnownKeys = keys.every((key) => (SANDBOX_STATUS_KEYS as readonly string[]).includes(key));
+  const hasRequiredKeys = ["available", "backend", "code", "message", "network", "tasks"]
+    .every((key) => Object.prototype.hasOwnProperty.call(record, key));
+  if (!hasKnownKeys || !hasRequiredKeys) return invalidSandboxStatus();
+
+  const tasks = record.tasks;
+  if (
+    record.backend !== "docker" ||
+    typeof record.available !== "boolean" ||
+    typeof record.code !== "string" ||
+    !/^[a-z][a-z0-9_]{0,63}$/.test(record.code) ||
+    typeof record.message !== "string" ||
+    record.message.trim().length === 0 ||
+    record.message.length > 4096 ||
+    record.network !== "none" ||
+    !Array.isArray(tasks) ||
+    tasks.length > 64 ||
+    !tasks.every((task) => typeof task === "string" && SANDBOX_TASK_NAME_PATTERN.test(task)) ||
+    new Set(tasks).size !== tasks.length
+  ) return invalidSandboxStatus();
+
+  const image = record.image;
+  if (image !== undefined && image !== null && !exactImageReference(image)) {
+    return invalidSandboxStatus();
+  }
+  if (record.available) {
+    if (record.code !== "ready" || tasks.length === 0 || !exactImageReference(image)) {
+      return invalidSandboxStatus();
+    }
+  } else if (record.code === "ready") {
+    return invalidSandboxStatus();
+  }
+
+  return {
+    backend: "docker",
+    available: record.available,
+    code: record.code,
+    message: record.message,
+    tasks: [...tasks],
+    ...(image === undefined ? {} : { image }),
+    network: "none",
+  };
+}
+
 export async function getJSON<T>(url: string): Promise<T> {
   const res = await fetch(url, { headers: { Accept: "application/json" } });
   if (!res.ok) throw new ApiError(res.status, res.statusText, await readErrorBody(res));
@@ -199,6 +275,10 @@ export const api = {
   agentChat(payload: import("./types").AgentChatPayload, signal?: AbortSignal) {
     return sse("/api/agent/chat", payload, signal);
   },
+  agentSandbox: async (cwd: string) =>
+    decodeAgentSandboxStatus(
+      await getJSON<unknown>(`/api/agent/sandbox?cwd=${encodeURIComponent(cwd)}`)
+    ),
   answerApproval: (
     runId: string,
     approvalToken: string,
@@ -207,6 +287,11 @@ export const api = {
     postJSON<import("./types").AgentApprovalAnswerResponse>(
       `/api/agent/runs/${encodeURIComponent(runId)}/answer`,
       { ...body, approval_token: approvalToken }
+    ),
+  cancelAgentRun: (runId: string, approvalToken: string) =>
+    postJSON<import("./types").AgentRunCancelResponse>(
+      `/api/agent/runs/${encodeURIComponent(runId)}/cancel`,
+      { approval_token: approvalToken }
     ),
   stagedChanges: (
     sessionId: string,

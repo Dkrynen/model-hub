@@ -5,7 +5,9 @@ import sqlite3
 import time
 import uuid
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
+
+from backend.project_paths import validate_relative_project_path
 
 from .config import ensure_workspace
 
@@ -273,7 +275,8 @@ def _staged_row_to_dict(r: tuple) -> dict:
 def _resolve_staged_target(root: str, path: str) -> Path:
     """Re-jail a staged path under its recorded root. Raises ValueError on escape."""
     base = Path(root).resolve()
-    target = (base / path).resolve()
+    rel_path = validate_relative_project_path(path)
+    target = base.joinpath(*rel_path.split("/")).resolve()
     try:
         rel = target.relative_to(base)
     except ValueError:
@@ -337,6 +340,53 @@ def list_staged_changes(session_id: str, run_id: str | None = None, status: str 
     rows = conn.execute(sql, params).fetchall()
     conn.close()
     return [_staged_row_to_dict(r) for r in rows]
+
+
+def list_staged_changes_for_root_bounded(
+    session_id: str,
+    root: str,
+    *,
+    status: str = "pending",
+    max_rows: int,
+    max_content_bytes: int,
+    should_abort: Callable[[], bool] | None = None,
+) -> tuple[list[dict], int, int]:
+    """Read one exact-root overlay only after DB-side count/byte bounds."""
+
+    conn = _ensure_db()
+    if should_abort is not None:
+        conn.set_progress_handler(lambda: 1 if should_abort() else 0, 1000)
+    try:
+        conn.execute("BEGIN")
+        count, content_bytes = conn.execute(
+            """
+            SELECT COUNT(*), COALESCE(SUM(LENGTH(CAST(new_content AS BLOB))), 0)
+            FROM staged_changes
+            WHERE session_id = ? AND root = ? AND status = ?
+            """,
+            (session_id, root, status),
+        ).fetchone()
+        count = int(count or 0)
+        content_bytes = int(content_bytes or 0)
+        if count > max_rows or content_bytes > max_content_bytes:
+            return [], count, content_bytes
+        rows = conn.execute(
+            f"""
+            SELECT {_STAGED_COLUMNS}
+            FROM staged_changes
+            WHERE session_id = ? AND root = ? AND status = ?
+            ORDER BY created_at ASC, rowid ASC
+            LIMIT ?
+            """,
+            (session_id, root, status, max_rows + 1),
+        ).fetchall()
+        return [_staged_row_to_dict(row) for row in rows], count, content_bytes
+    except sqlite3.OperationalError as exc:
+        if should_abort is not None and should_abort():
+            raise InterruptedError("staged change query cancelled") from exc
+        raise
+    finally:
+        conn.close()
 
 
 def get_staged_change(change_id: str) -> Optional[dict]:
