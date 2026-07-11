@@ -2943,6 +2943,81 @@ LIBRARY_CACHE = None
 LIBRARY_CACHE_TIME = 0
 LIBRARY_CACHE_TTL = 3600
 LIBRARY_CACHE_REFRESHING = False
+USER_LIBRARY_CACHE_PATH = Path.home() / ".model-hub" / "cache" / "library_cache.json"
+SHIPPED_LIBRARY_CACHE_PATH = (
+    Path(__file__).resolve().parent / "cookbook" / "data" / "library_cache.json"
+)
+
+
+def _write_library_cache(models):
+    """Persist refreshed data in user space without touching shipped assets."""
+    cache_path = USER_LIBRARY_CACHE_PATH
+    temp_path = cache_path.with_name(f".{cache_path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        cache_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        with open(temp_path, "w", encoding="utf-8") as f:
+            json.dump({"fetched": time.time(), "models": models}, f)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temp_path, cache_path)
+        return True
+    except Exception:
+        return False
+    finally:
+        try:
+            temp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _normalize_library_models(models):
+    """Validate cached rows for Browse and discard fields the scraper never emits."""
+    if not isinstance(models, list) or not models:
+        return None
+
+    normalized = []
+    for model in models:
+        if not isinstance(model, dict):
+            return None
+        name = model.get("name")
+        if not isinstance(name, str) or not name.strip():
+            return None
+
+        clean = {"name": name.strip()}
+        for field in ("description", "pulls", "tag_count"):
+            if field in model:
+                value = model[field]
+                if not isinstance(value, str):
+                    return None
+                clean[field] = value
+        for field in ("capabilities", "sizes"):
+            if field in model:
+                value = model[field]
+                if not isinstance(value, list) or not all(
+                    isinstance(item, str) for item in value
+                ):
+                    return None
+                clean[field] = list(value)
+        normalized.append(clean)
+    return normalized
+
+
+def _read_library_cache(cache_path):
+    try:
+        with open(cache_path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, TypeError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    models = _normalize_library_models(data.get("models"))
+    if models is None:
+        return None
+    try:
+        fetched = float(data.get("fetched", 0))
+    except (TypeError, ValueError):
+        fetched = 0
+    return models, fetched
 
 
 def _scrape_library():
@@ -2976,12 +3051,7 @@ def _scrape_library():
                 "pulls": pulls,
                 "tag_count": tag_count,
             })
-        cache_path = Path(__file__).parent / "cookbook" / "data" / "library_cache.json"
-        try:
-            with open(cache_path, "w") as f:
-                json.dump({"fetched": time.time(), "models": models}, f)
-        except Exception:
-            pass
+        _write_library_cache(models)
         return models
     except Exception as e:
         return {"error": str(e), "models": []}
@@ -3019,20 +3089,16 @@ def _fetch_library():
             _refresh_library_background()
         return LIBRARY_CACHE
 
-    cache_path = Path(__file__).parent / "cookbook" / "data" / "library_cache.json"
-    if cache_path.exists():
-        try:
-            with open(cache_path) as f:
-                data = json.load(f)
-            models = data.get("models")
-            if models:
-                LIBRARY_CACHE = models
-                LIBRARY_CACHE_TIME = now
-                if now - data.get("fetched", 0) > LIBRARY_CACHE_TTL:
-                    _refresh_library_background()
-                return LIBRARY_CACHE
-        except Exception:
-            pass
+    for cache_path in (USER_LIBRARY_CACHE_PATH, SHIPPED_LIBRARY_CACHE_PATH):
+        cached = _read_library_cache(cache_path)
+        if cached is None:
+            continue
+        models, fetched = cached
+        LIBRARY_CACHE = models
+        LIBRARY_CACHE_TIME = now
+        if now - fetched > LIBRARY_CACHE_TTL:
+            _refresh_library_background()
+        return LIBRARY_CACHE
 
     # Cold cache — scrape synchronously (happens once, ever).
     models = _scrape_library()

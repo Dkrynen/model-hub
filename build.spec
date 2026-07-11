@@ -33,11 +33,7 @@ crypto_datas, crypto_binaries, crypto_hidden = collect_all("cryptography")
 webview_datas, webview_binaries, webview_hidden = collect_all("webview")
 
 # -- Collect backend Python files --
-backend_dirs = [
-    "backend",
-    "backend/cookbook",
-    "backend/cookbook/data",
-]
+backend_dir = PROJECT_ROOT / "backend"
 
 # -- Collect frontend static files --
 # The React app (web/dist) is what api.py serves when present; the legacy
@@ -50,12 +46,10 @@ frontend_exts = (".html", ".css", ".js", ".png", ".jpg", ".jpeg", ".svg",
                  ".gif", ".ico", ".woff", ".woff2", ".ttf", ".json")
 
 datas = []
-for d in backend_dirs:
-    p = PROJECT_ROOT / d
-    if p.is_dir():
-        for f in p.rglob("*"):
-            if f.suffix in (".py", ".json", ".txt") and "__pycache__" not in f.parts:
-                datas.append((str(f), d))
+if backend_dir.is_dir():
+    for f in backend_dir.rglob("*"):
+        if f.suffix in (".py", ".json", ".txt") and "__pycache__" not in f.parts:
+            datas.append((str(f), str(f.parent.relative_to(PROJECT_ROOT))))
 
 if frontend_dir.is_dir():
     for f in frontend_dir.rglob("*"):
