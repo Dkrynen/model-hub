@@ -36,6 +36,7 @@ from .plugin.builtins.tools import TOOL_HANDLERS, TOOL_SCHEMAS
 from .permission import PermissionEngine
 from .pro_install import install_pro_plugin
 from .provider.registry import default_provider
+from .provider.ollama import OllamaProvider
 from .update import is_newer, select_release_download_url
 
 try:
@@ -241,11 +242,17 @@ class _AgentRun:
     cancel_announced: bool = False
     cancel_journaled: bool = False
     cancel_journal_in_progress: bool = False
+    worker_done: threading.Event = field(default_factory=threading.Event, repr=False)
+    persistence_done: threading.Event = field(default_factory=threading.Event, repr=False)
     state_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
 
 _AGENT_RUNS: dict[str, _AgentRun] = {}
 _AGENT_RUNS_LOCK = threading.Lock()
+
+
+class _AgentSessionBusyError(RuntimeError):
+    pass
 
 
 def _register_agent_run(run_id: str, run: _AgentRun) -> None:
@@ -258,9 +265,21 @@ def _register_agent_run(run_id: str, run: _AgentRun) -> None:
         ]
         for rid in stale:
             _AGENT_RUNS.pop(rid, None)
+        if any(existing.session_id == run.session_id for existing in _AGENT_RUNS.values()):
+            raise _AgentSessionBusyError("Thread already has an active run")
         if len(_AGENT_RUNS) >= MAX_AGENT_RUNS:
             raise RuntimeError("Too many active agent runs")
         _AGENT_RUNS[run_id] = run
+
+
+def _release_agent_run_if_finished(run_id: str, run: _AgentRun) -> None:
+    """Release a thread lease only after both worker and persistence settle."""
+
+    if not (run.worker_done.is_set() and run.persistence_done.is_set()):
+        return
+    with _AGENT_RUNS_LOCK:
+        if _AGENT_RUNS.get(run_id) is run:
+            _AGENT_RUNS.pop(run_id, None)
 
 
 def _persist_run_event(run: _AgentRun, event: dict) -> None:
@@ -1384,13 +1403,15 @@ def ollama_chat():
     )
 
 
-_WEB_AGENT_MODES = {"build", "plan", "explore"}
+_WEB_AGENT_MODES = {"ask", "build", "plan", "explore"}
 _WEB_AGENT_TOOLS = {
+    "ask": [],
     "build": ["read_file", "write_file", "list_files"],
     "plan": ["read_file", "list_files"],
     "explore": ["read_file", "list_files", "web_search"],
 }
 _WEB_AGENT_PROMPTS = {
+    "ask": "",
     "build": "You are the LAC Workbench build agent for one explicit project. You can inspect files and propose write_file changes, which are staged for separate user review and apply. You cannot run shell commands on the host. Do not claim tests, builds, commands, or staged changes have run unless a provided tool result proves it.",
     "plan": "You are the LAC Workbench plan agent. You have read-only access. Inspect context, reason carefully, and propose concrete implementation steps. Never claim you changed files.",
     "explore": "You are the LAC Workbench explore agent. You have read-only code and web search access. Gather context, summarize findings, and cite the files or sources you used.",
@@ -1462,8 +1483,14 @@ def _web_agent(
     *,
     sandbox_tasks: tuple[str, ...] = (),
 ) -> Agent:
+    is_ask = agent_name == "ask"
     is_build = agent_name == "build"
     permissions = copy.deepcopy(FULL_PERMISSIONS if is_build else READONLY_PERMISSIONS)
+    if is_ask:
+        permissions.filesystem.read = False
+        permissions.network.fetch = False
+        permissions.bash.read_output = False
+        permissions.mcp.connect = False
     if is_build:
         permissions.bash.run = False
     tools = list(_WEB_AGENT_TOOLS[agent_name])
@@ -1483,7 +1510,11 @@ def _web_agent(
         description=(
             "Project-scoped web build agent with staged writes and optional named Docker tasks"
             if is_build
-            else f"Read-only web {agent_name} agent"
+            else (
+                "Project-bound local Ask chat with no tools"
+                if is_ask
+                else f"Read-only web {agent_name} agent"
+            )
         ),
         model=model,
         system_prompt=prompt,
@@ -1936,6 +1967,34 @@ def _agent_chat_options(provider: object) -> dict:
     }
 
 
+def _loopback_ollama_host(raw: object) -> str:
+    value = str(raw or "").strip()
+    try:
+        parsed = urlsplit(value)
+        host = (parsed.hostname or "").lower().rstrip(".")
+        _ = parsed.port
+    except ValueError as exc:
+        raise ValueError("Ask mode requires a loopback Ollama host") from exc
+    if (
+        parsed.scheme not in {"http", "https"}
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or parsed.path not in {"", "/"}
+    ):
+        raise ValueError("Ask mode requires a loopback Ollama host")
+    if host != "localhost":
+        try:
+            if not ipaddress.ip_address(host).is_loopback:
+                raise ValueError("Ask mode requires a loopback Ollama host")
+        except ValueError as exc:
+            if str(exc) == "Ask mode requires a loopback Ollama host":
+                raise
+            raise ValueError("Ask mode requires a loopback Ollama host") from exc
+    return value.rstrip("/")
+
+
 @app.route("/api/agent/chat", methods=["POST"])
 def agent_chat():
     if not _is_trusted_local_approval_request():
@@ -1979,6 +2038,8 @@ def agent_chat():
     saved_session = get_session(session_id) if session_id else None
     if session_id and saved_session is None:
         return jsonify({"error": "Session not found"}), 404
+    if saved_session is not None:
+        session_name = str(saved_session.get("name") or session_name)
 
     saved_project_id = (
         str(saved_session.get("project_id") or "") if saved_session is not None else ""
@@ -1995,6 +2056,9 @@ def agent_chat():
         project_id = saved_project_id
     elif saved_session is not None and project_id:
         return jsonify({"error": "Legacy unassigned threads cannot be bound implicitly"}), 409
+
+    if agent_name == "ask" and not project_id:
+        return jsonify({"error": "Ask mode requires a registered project"}), 400
 
     project = None
     if project_id:
@@ -2041,18 +2105,28 @@ def agent_chat():
     if project_id:
         try:
             _assert_registered_project_root(project_id, cwd)
-            project_config = resolve_config(cwd)
+            if agent_name != "ask":
+                project_config = resolve_config(cwd)
             _assert_registered_project_root(project_id, cwd)
         except (UnsafeProjectConfigError, _ProjectRootDriftError) as e:
             return jsonify({"error": str(e)}), 409
 
     if not model:
+        if agent_name == "ask":
+            return jsonify({"error": "Ask mode requires an explicit local model"}), 400
         if project_id:
             model = (project_config.default_model or "").strip()
         else:
             model = (load_config().default_model or "").strip()
     if not model:
         return jsonify({"error": "Model required"}), 400
+
+    ask_ollama_host = None
+    if agent_name == "ask":
+        try:
+            ask_ollama_host = _loopback_ollama_host(OLLAMA_HOST)
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 409
 
     created_session = not session_id
     if created_session:
@@ -2090,7 +2164,11 @@ def agent_chat():
             model,
             sandbox_tasks=sandbox_tasks,
         )
-        provider = default_provider(cwd)
+        provider = (
+            OllamaProvider(base_url=ask_ollama_host)
+            if agent_name == "ask"
+            else default_provider(cwd)
+        )
         if project_id:
             _assert_registered_project_root(project_id, cwd)
         chat_options = _agent_chat_options(provider)
@@ -2102,16 +2180,20 @@ def agent_chat():
             created_at=time.time(),
         )
         base_handlers = (
-            _project_bound_tool_handlers(
-                TOOL_HANDLERS,
-                project_id=project_id,
-                expected_root=cwd,
+            {}
+            if agent_name == "ask"
+            else (
+                _project_bound_tool_handlers(
+                    TOOL_HANDLERS,
+                    project_id=project_id,
+                    expected_root=cwd,
+                )
+                if project_id
+                else TOOL_HANDLERS
             )
-            if project_id
-            else TOOL_HANDLERS
         )
         handlers = base_handlers
-        schemas = list(TOOL_SCHEMAS)
+        schemas = [] if agent_name == "ask" else list(TOOL_SCHEMAS)
         permission_engine = None
         tool_preparers = {}
         always_ask_tools = set()
@@ -2182,10 +2264,10 @@ def agent_chat():
             handlers,
             schemas,
             ctx={"cwd": str(cwd), "cancel_event": run.cancel_event},
-            max_iterations=max_iterations,
+            max_iterations=1 if agent_name == "ask" else max_iterations,
             chat_options=chat_options,
             permission_engine=permission_engine,
-            on_ask=_make_web_ask(run_id, run),
+            on_ask=None if agent_name == "ask" else _make_web_ask(run_id, run),
             tool_preparers=tool_preparers,
             always_ask_tools=always_ask_tools,
             never_remember_tools=never_remember_tools,
@@ -2200,6 +2282,10 @@ def agent_chat():
         raise
     try:
         _register_agent_run(run_id, run)
+    except _AgentSessionBusyError as e:
+        if created_session:
+            delete_session(session_id)
+        return jsonify({"error": str(e)}), 409
     except RuntimeError as e:
         if created_session:
             delete_session(session_id)
@@ -2247,10 +2333,8 @@ def agent_chat():
         finally:
             with run.state_lock:
                 _put_run_item(run, _RUN_SENTINEL, terminal=True)
-            if run.cancelled:
-                with _AGENT_RUNS_LOCK:
-                    if _AGENT_RUNS.get(run_id) is run:
-                        _AGENT_RUNS.pop(run_id, None)
+            run.worker_done.set()
+            _release_agent_run_if_finished(run_id, run)
 
     worker = threading.Thread(target=pump, daemon=True)
     run.thread = worker
@@ -2319,6 +2403,8 @@ def agent_chat():
                         messages=persisted_messages,
                         name=session_name,
                         workspace=workspace,
+                        project_id=project_id or None,
+                        create_if_missing=False,
                     )
                     saved_done = True
                 elif ev_type in _PERSISTED_AGENT_EVENT_TYPES and not skip_persist:
@@ -2344,24 +2430,28 @@ def agent_chat():
                 run.ask_event.set()
             if worker_started:
                 worker.join(timeout=WORKER_JOIN_TIMEOUT)
-            if not worker_started or not worker.is_alive():
-                with _AGENT_RUNS_LOCK:
-                    if _AGENT_RUNS.get(run_id) is run:
-                        _AGENT_RUNS.pop(run_id, None)
-            if not saved_done:
-                if assistant_content:
-                    persisted_messages.append({
-                        "role": "assistant",
-                        "content": assistant_content,
-                        "timestamp": started_at + (len(persisted_messages) * 0.000001),
-                    })
-                save_session(
-                    session_id=session_id,
-                    model=model,
-                    messages=persisted_messages,
-                    name=session_name,
-                    workspace=workspace,
-                )
+            if not worker_started:
+                run.worker_done.set()
+            try:
+                if not saved_done:
+                    if assistant_content:
+                        persisted_messages.append({
+                            "role": "assistant",
+                            "content": assistant_content,
+                            "timestamp": started_at + (len(persisted_messages) * 0.000001),
+                        })
+                    save_session(
+                        session_id=session_id,
+                        model=model,
+                        messages=persisted_messages,
+                        name=session_name,
+                        workspace=workspace,
+                        project_id=project_id or None,
+                        create_if_missing=False,
+                    )
+            finally:
+                run.persistence_done.set()
+                _release_agent_run_if_finished(run_id, run)
             if not disconnected:
                 # yielding after GeneratorExit is a RuntimeError - only emit on normal end
                 yield "data: [DONE]\n\n"

@@ -10,6 +10,7 @@ from backend.agent.runner import (
     MAX_TOOL_ARGUMENT_CHARS,
     MAX_TOOL_RESULT_CHARS,
     PreparedToolCall,
+    _completion_stats,
 )
 from backend.permission import AlwaysAllowStore, Decision, PermissionEngine, parse_rules
 from backend.agent.permissions import FULL_PERMISSIONS, READONLY_PERMISSIONS, Permissions
@@ -68,6 +69,129 @@ def test_runner_no_tool_call(mock_provider, tool_registry):
     assert result.error is None
     assert "hello there" in result.content
     assert result.messages[-1]["role"] == "assistant"
+
+
+def test_runner_done_event_exposes_only_valid_completion_stats(mock_provider):
+    agent = get_agent("plan")
+    agent.model = "mock:1b"
+    mock_provider.set_script([
+        ChatDelta(
+            content="hello",
+            done=True,
+            raw={
+                "total_duration": 10_000_000,
+                "load_duration": 2_000_000,
+                "prompt_eval_count": 12,
+                "prompt_eval_duration": 3_000_000,
+                "eval_count": 7,
+                "eval_duration": 5_000_000,
+                "message": {"content": "must not leak"},
+                "unknown": "must not leak",
+                "invalid_count": True,
+            },
+        )
+    ])
+    runner = AgentRunner(mock_provider, agent, {}, [])
+
+    result = asyncio.run(runner.run("hi"))
+    done = next(event for event in result.events if event["type"] == "done")
+
+    assert {key: done[key] for key in (
+        "total_duration",
+        "load_duration",
+        "prompt_eval_count",
+        "prompt_eval_duration",
+        "eval_count",
+        "eval_duration",
+    )} == {
+        "total_duration": 10_000_000,
+        "load_duration": 2_000_000,
+        "prompt_eval_count": 12,
+        "prompt_eval_duration": 3_000_000,
+        "eval_count": 7,
+        "eval_duration": 5_000_000,
+    }
+    assert "message" not in done
+    assert "unknown" not in done
+
+
+def test_runner_ignores_provider_tool_calls_when_agent_has_no_tool_schemas(
+    mock_provider,
+):
+    agent = get_agent("plan")
+    agent.name = "ask"
+    agent.type = "ask"
+    agent.model = "mock:1b"
+    agent.tools = []
+    call = {
+        "function": {
+            "name": "write_file",
+            "arguments": json.dumps({"path": "escape.txt", "content": "no"}),
+        }
+    }
+    mock_provider.set_script([
+        ChatDelta(content="plain answer", tool_calls=[call], done=True)
+    ])
+    executed = []
+    runner = AgentRunner(
+        mock_provider,
+        agent,
+        {"write_file": lambda args, ctx: executed.append(args) or "unexpected"},
+        [],
+        max_iterations=1,
+    )
+
+    result = asyncio.run(runner.run("answer without tools"))
+
+    assert result.error is None
+    assert result.content == "plain answer"
+    assert executed == []
+    assert not [
+        event
+        for event in result.events
+        if event["type"] in {"tool_calls", "tool_call", "tool_result"}
+    ]
+    assert mock_provider._calls[0]["tools"] is None
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        {"total_duration": 10**400},
+        {"load_duration": float("nan")},
+        {"prompt_eval_duration": float("inf")},
+        {"eval_duration": -1},
+        {"prompt_eval_count": True},
+        {"eval_count": 10**400},
+    ],
+)
+def test_completion_stats_reject_invalid_or_unbounded_numbers(raw):
+    assert _completion_stats(raw) == {}
+
+
+def test_runner_emits_thinking_progress_without_exposing_reasoning_text(
+    mock_provider,
+):
+    agent = get_agent("plan")
+    agent.model = "mock:1b"
+    mock_provider.set_script([
+        ChatDelta(
+            content="",
+            done=False,
+            raw={"message": {"thinking": "private chain of thought"}},
+        ),
+        ChatDelta(content="final answer", done=True),
+    ])
+    runner = AgentRunner(mock_provider, agent, {}, [])
+
+    result = asyncio.run(runner.run("think"))
+
+    assert [event["type"] for event in result.events] == [
+        "thinking",
+        "delta",
+        "done",
+    ]
+    assert "private chain of thought" not in json.dumps(result.events)
 
 
 def test_runner_executes_tool_call(mock_provider, tool_registry):

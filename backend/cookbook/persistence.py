@@ -474,7 +474,8 @@ def save_session(
     name: str = "",
     workspace: str = "",
     project_id: str | None = None,
-) -> None:
+    create_if_missing: bool = True,
+) -> bool:
     conn = _ensure_db()
     now = time.time()
     try:
@@ -482,6 +483,8 @@ def save_session(
             "SELECT workspace, project_id FROM sessions WHERE id = ?", (session_id,)
         ).fetchone()
         if not existing:
+            if not create_if_missing:
+                return False
             ws, bound_project_id = _resolve_new_session_identity(workspace, project_id)
             conn.execute(
                 "INSERT INTO sessions (id, name, model, system_prompt, context, workspace, project_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -523,6 +526,7 @@ def save_session(
                 ),
             )
         conn.commit()
+        return True
     except Exception:
         conn.rollback()
         raise

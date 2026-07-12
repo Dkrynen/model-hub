@@ -167,7 +167,9 @@ def test_agent_chat_preserves_saved_workspace_when_client_omits_it(flask_app, is
 
     assert response.status_code == 200
     _events(response)
-    assert persistence.get_session(sid)["workspace"] == "saved-workspace"
+    saved = persistence.get_session(sid)
+    assert saved["workspace"] == "saved-workspace"
+    assert saved["name"] == "t"
 
 
 def test_agent_chat_accepts_build_and_rejects_unknown_modes(
@@ -207,7 +209,239 @@ def test_agent_chat_accepts_build_and_rejects_unknown_modes(
     )
     assert unknown.status_code == 403
     assert unknown.get_json()["error"] == "Unknown web agent mode: shell"
-    assert unknown.get_json()["allowed_agents"] == ["build", "explore", "plan"]
+    assert unknown.get_json()["allowed_agents"] == ["ask", "build", "explore", "plan"]
+
+
+def test_project_bound_ask_is_explicit_local_zero_tool_mode(
+    flask_app, isolated_home, monkeypatch, tmp_path
+):
+    import backend.api as api_mod
+    from backend.cookbook import persistence
+    from backend.cookbook.config import create_workspace
+
+    captured: dict = {}
+
+    class FakeProvider:
+        name = "ollama"
+
+    class FakeRunner:
+        def __init__(self, provider, agent, handlers, schemas, **kwargs):
+            captured.update({
+                "provider": provider,
+                "agent": agent,
+                "handlers": handlers,
+                "schemas": schemas,
+                "kwargs": kwargs,
+            })
+
+        async def run_stream(self, user_text, history=None):
+            yield {"type": "delta", "content": "Local answer"}
+            yield {
+                "type": "done",
+                "content": "Local answer",
+                "messages": [],
+                "iterations": 1,
+                "eval_count": 4,
+                "eval_duration": 2_000_000_000,
+            }
+
+    workspace = create_workspace("Ask Client")
+    root = tmp_path / "ask-project"
+    root.mkdir()
+    project = persistence.create_project(
+        workspace=workspace.id,
+        name="Ask Project",
+        root=str(root),
+    )
+    provider_calls = []
+    monkeypatch.setattr(api_mod, "AgentRunner", FakeRunner)
+    monkeypatch.setattr(
+        api_mod,
+        "OllamaProvider",
+        lambda **kwargs: provider_calls.append(kwargs) or FakeProvider(),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        api_mod,
+        "default_provider",
+        lambda *_args, **_kwargs: pytest.fail("Ask must not resolve the project provider"),
+    )
+
+    response = flask_app.test_client().post(
+        "/api/agent/chat",
+        json={
+            "agent": "ask",
+            "model": "qwen-local:7b",
+            "message": "Keep this thread local",
+            "project_id": project["id"],
+        },
+    )
+
+    assert response.status_code == 200
+    events = _events(response)
+    session = persistence.get_session(events[0]["session_id"])
+    assert provider_calls == [{"base_url": api_mod.OLLAMA_HOST}]
+    assert session["project_id"] == project["id"]
+    assert session["workspace"] == workspace.id
+    assert [message["content"] for message in session["messages"]] == [
+        "Keep this thread local",
+        "Local answer",
+    ]
+    assert captured["agent"].tools == []
+    assert captured["agent"].system_prompt == ""
+    assert not captured["agent"].permissions.can_read()
+    assert not captured["agent"].permissions.can_fetch()
+    assert not captured["agent"].permissions.can_mcp()
+    assert captured["handlers"] == {}
+    assert captured["schemas"] == []
+    assert captured["kwargs"]["permission_engine"] is None
+    assert captured["kwargs"]["on_ask"] is None
+    assert captured["kwargs"]["max_iterations"] == 1
+    assert not any(event["type"] in {"tool_call", "tool_calls", "tool_result", "ask"} for event in events)
+
+
+def test_ask_requires_registered_project_and_explicit_model_before_provider(
+    flask_app, isolated_home, monkeypatch, tmp_path
+):
+    import backend.api as api_mod
+    from backend.cookbook import persistence
+    from backend.cookbook.config import create_workspace
+
+    provider_calls = []
+    monkeypatch.setattr(
+        api_mod,
+        "OllamaProvider",
+        lambda **kwargs: provider_calls.append(kwargs) or object(),
+        raising=False,
+    )
+
+    without_project = flask_app.test_client().post(
+        "/api/agent/chat",
+        json={"agent": "ask", "model": "qwen-local:7b", "message": "Hello"},
+    )
+    assert without_project.status_code == 400
+    assert "registered project" in without_project.get_json()["error"].lower()
+
+    workspace = create_workspace("Ask Client")
+    root = tmp_path / "ask-project"
+    root.mkdir()
+    project = persistence.create_project(
+        workspace=workspace.id,
+        name="Ask Project",
+        root=str(root),
+    )
+    without_model = flask_app.test_client().post(
+        "/api/agent/chat",
+        json={"agent": "ask", "message": "Hello", "project_id": project["id"]},
+    )
+    assert without_model.status_code == 400
+    assert without_model.get_json()["error"] == "Ask mode requires an explicit local model"
+    assert provider_calls == []
+
+
+@pytest.mark.parametrize(
+    "ollama_host",
+    [
+        "https://models.example.com:11434",
+        "http://192.168.1.25:11434",
+        "http://[2001:db8::25]:11434",
+    ],
+)
+def test_ask_rejects_non_loopback_ollama_before_session_or_provider(
+    flask_app, isolated_home, monkeypatch, tmp_path, ollama_host
+):
+    import backend.api as api_mod
+    from backend.cookbook import persistence
+    from backend.cookbook.config import create_workspace
+
+    workspace = create_workspace("Ask Client")
+    root = tmp_path / "ask-project"
+    root.mkdir()
+    project = persistence.create_project(
+        workspace=workspace.id,
+        name="Ask Project",
+        root=str(root),
+    )
+    provider_calls = []
+    monkeypatch.setattr(api_mod, "OLLAMA_HOST", ollama_host)
+    monkeypatch.setattr(
+        api_mod,
+        "OllamaProvider",
+        lambda **kwargs: provider_calls.append(kwargs) or object(),
+    )
+
+    response = flask_app.test_client().post(
+        "/api/agent/chat",
+        json={
+            "agent": "ask",
+            "model": "qwen-local:7b",
+            "message": "Do not send this away",
+            "project_id": project["id"],
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.get_json()["error"] == "Ask mode requires a loopback Ollama host"
+    assert provider_calls == []
+    assert persistence.list_sessions(
+        workspace=workspace.id,
+        project_id=project["id"],
+    ) == []
+
+
+def test_project_bound_ask_does_not_resurrect_a_deleted_thread(
+    flask_app, isolated_home, monkeypatch, tmp_path
+):
+    import backend.api as api_mod
+    from backend.cookbook import persistence
+    from backend.cookbook.config import create_workspace
+
+    workspace = create_workspace("Ask Client")
+    root = tmp_path / "ask-project"
+    root.mkdir()
+    project = persistence.create_project(
+        workspace=workspace.id,
+        name="Ask Project",
+        root=str(root),
+    )
+
+    class FakeProvider:
+        name = "ollama"
+
+    class DeletingRunner:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def run_stream(self, user_text, history=None):
+            sessions = persistence.list_sessions(
+                workspace=workspace.id,
+                project_id=project["id"],
+            )
+            assert len(sessions) == 1
+            persistence.delete_session(sessions[0]["id"])
+            yield {
+                "type": "done",
+                "content": "late answer",
+                "messages": [],
+                "iterations": 1,
+            }
+
+    monkeypatch.setattr(api_mod, "AgentRunner", DeletingRunner)
+    monkeypatch.setattr(api_mod, "OllamaProvider", lambda **_kwargs: FakeProvider())
+
+    response = flask_app.test_client().post(
+        "/api/agent/chat",
+        json={
+            "agent": "ask",
+            "model": "qwen-local:7b",
+            "message": "Delete while running",
+            "project_id": project["id"],
+        },
+    )
+
+    assert response.status_code == 200
+    events = _events(response)
+    assert persistence.get_session(events[0]["session_id"]) is None
 
 
 def test_agent_chat_requires_explicit_project_cwd_for_build(
@@ -790,6 +1024,38 @@ def test_agent_run_registry_enforces_capacity(monkeypatch):
         api_mod._register_agent_run("one", make_run("s1"))
         with pytest.raises(RuntimeError, match="Too many active agent runs"):
             api_mod._register_agent_run("two", make_run("s2"))
+    finally:
+        with api_mod._AGENT_RUNS_LOCK:
+            api_mod._AGENT_RUNS.clear()
+
+
+def test_agent_run_registry_rejects_overlapping_runs_for_one_session():
+    import queue as queue_mod
+    import threading
+
+    import backend.api as api_mod
+
+    def make_run():
+        return api_mod._AgentRun(
+            ask_event=threading.Event(),
+            queue=queue_mod.Queue(),
+            session_id="same-session",
+            created_at=time.time(),
+        )
+
+    with api_mod._AGENT_RUNS_LOCK:
+        api_mod._AGENT_RUNS.clear()
+    try:
+        first = make_run()
+        api_mod._register_agent_run("one", first)
+        first.worker_done.set()
+        api_mod._release_agent_run_if_finished("one", first)
+        with pytest.raises(RuntimeError, match="already has an active run"):
+            api_mod._register_agent_run("two", make_run())
+        first.persistence_done.set()
+        api_mod._release_agent_run_if_finished("one", first)
+        api_mod._register_agent_run("two", make_run())
+        assert set(api_mod._AGENT_RUNS) == {"two"}
     finally:
         with api_mod._AGENT_RUNS_LOCK:
             api_mod._AGENT_RUNS.clear()

@@ -64,11 +64,11 @@ class OllamaProvider(LLMProvider):
             return []
 
     def _extract_tool_calls(self, message: dict, tools_requested: bool = False) -> list[dict]:
+        if not tools_requested:
+            return []
         tc = message.get("tool_calls") or []
         if tc:
             return tc
-        if not tools_requested:
-            return []
         content = message.get("content", "") or ""
         if not content:
             return []

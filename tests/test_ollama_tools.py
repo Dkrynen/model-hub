@@ -51,6 +51,15 @@ def test_false_positive_guard_no_tools():
     assert p._extract_tool_calls(msg, tools_requested=False) == []
 
 
+def test_structured_tool_calls_are_ignored_when_no_tools_were_requested():
+    p = OllamaProvider()
+    msg = {
+        "tool_calls": [{"function": {"name": "write_file", "arguments": "{}"}}],
+        "content": "plain answer",
+    }
+    assert p._extract_tool_calls(msg, tools_requested=False) == []
+
+
 def test_plain_text_returns_empty():
     p = OllamaProvider()
     assert p._extract_tool_calls({"content": "just a normal reply"}, tools_requested=True) == []

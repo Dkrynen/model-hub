@@ -34,3 +34,46 @@ test("project context reset clears thread-owned prompts and drafts", () => {
   assert.match(resetSource, /registeringProjectRef\.current = false/);
   assert.match(resetSource, /setRegisteringProject\(false\)/);
 });
+
+test("Ask routes through the durable project-bound agent stream", () => {
+  assert.doesNotMatch(source, /streamPlainChat/);
+  assert.doesNotMatch(source, /api\.chat\(/);
+  assert.match(source, /streamAgentChat\([\s\S]*?runMode,[\s\S]*?runProjectId/);
+  assert.match(source, /agent === "ask"[\s\S]*?chatStatsFromEvent/);
+});
+
+test("Clear starts a fresh thread instead of retaining hidden saved history", () => {
+  const start = source.indexOf("const clear =");
+  const end = source.indexOf("const projectMissing", start);
+  assert.ok(start >= 0 && end > start);
+  const clearSource = source.slice(start, end);
+  assert.match(clearSource, /cancelSessionLoad\(\)/);
+  assert.match(clearSource, /selectSession\(""\)/);
+});
+
+test("Stop keeps send blocked until the aborted stream settles", () => {
+  assert.match(source, /runInFlightRef/);
+  const start = source.indexOf("const invalidateActiveRun");
+  const end = source.indexOf("const clearStagedContext", start);
+  assert.ok(start >= 0 && end > start);
+  assert.doesNotMatch(source.slice(start, end), /setStreaming\(false\)/);
+  assert.match(source, /runInFlightRef\.current = false[\s\S]*?setStreaming\(false\)/);
+});
+
+test("settled canceled runs still refresh the durable Threads list", () => {
+  const sendStart = source.indexOf("const send =");
+  const streamStart = source.indexOf("const streamAgentChat", sendStart);
+  assert.ok(sendStart >= 0 && streamStart > sendStart);
+  const sendSource = source.slice(sendStart, streamStart);
+  const finallyStart = sendSource.lastIndexOf("} finally {");
+  assert.ok(finallyStart >= 0);
+  const finallySource = sendSource.slice(finallyStart);
+  assert.match(finallySource, /sessions\.reload\(\)/);
+  assert.doesNotMatch(finallySource, /isActiveRun\(generation\)[\s\S]*?sessions\.reload\(\)/);
+});
+
+test("Ask preserves reasoning progress without exposing thinking text", () => {
+  assert.match(source, /type === "thinking"/);
+  assert.match(source, /replaceAssistant\(assistantIndex, "Thinking\.\.\.", generation, true\)/);
+  assert.match(source, /durableTranscript\(system, messages\)/);
+});

@@ -16,6 +16,8 @@ import {
   workbenchControlsDisabled,
   workbenchSendDisabled,
   workbenchSendLabel,
+  chatStatsFromEvent,
+  durableTranscript,
 } from "../src/lib/agent-workbench.ts";
 
 test("approval actions preserve the run and ask rendered by the card", () => {
@@ -64,6 +66,54 @@ test("every Workbench mode requires a registered project identity", () => {
   assert.equal(agentModeNeedsProject("ask", ""), true);
   assert.equal(workbenchSendLabel("build", ""), "Select project");
   assert.equal(workbenchSendLabel("plan", "project-1"), "Send");
+});
+
+test("Ask completion stats preserve TTFT and Ollama token timing", () => {
+  assert.deepEqual(
+    chatStatsFromEvent({
+      load_duration: 2_000_000,
+      prompt_eval_duration: 3_000_000,
+      eval_count: 8,
+      eval_duration: 2_000_000_000,
+    }, 125),
+    {
+      ttft_ms: 125,
+      load_ms: 2,
+      prompt_ms: 3,
+      eval_ms: 2000,
+      eval_count: 8,
+      tokens_per_second: 4,
+    }
+  );
+});
+
+test("display-only reasoning placeholders never become durable model history", () => {
+  assert.deepEqual(
+    durableTranscript("Stay local", [
+      { role: "user", content: "First turn" },
+      { role: "assistant", content: "Thinking...", ephemeral: true },
+      { role: "assistant", content: "A real answer" },
+      { role: "assistant", content: "No response text returned.", ephemeral: true },
+    ]),
+    [
+      { role: "system", content: "Stay local" },
+      { role: "user", content: "First turn" },
+      { role: "assistant", content: "A real answer" },
+    ]
+  );
+});
+
+test("transcript filtering is metadata-based, not content-based", () => {
+  assert.deepEqual(
+    durableTranscript("", [
+      { role: "assistant", content: "Thinking..." },
+      { role: "assistant", content: "No response text returned." },
+    ]),
+    [
+      { role: "assistant", content: "Thinking..." },
+      { role: "assistant", content: "No response text returned." },
+    ]
+  );
 });
 
 test("session loading disables Workbench controls and send even with otherwise valid input", () => {

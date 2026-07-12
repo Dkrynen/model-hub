@@ -369,7 +369,7 @@ export interface SessionDetail extends SessionSummary {
 }
 
 export interface AgentChatPayload {
-  agent: "plan" | "explore" | "build";
+  agent: "ask" | "plan" | "explore" | "build";
   model: string;
   message: string;
   messages?: SessionMessage[];

@@ -4,6 +4,7 @@ import asyncio
 import copy
 import inspect
 import json
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, AsyncIterator, Awaitable, Callable
@@ -30,6 +31,53 @@ _TOOL_ARGUMENT_REDACTION = {
     "_redacted": f"arguments exceeded {MAX_TOOL_ARGUMENT_CHARS} characters"
 }
 _TOOL_RESULT_TRUNCATION_SUFFIX = "\n...[tool result truncated]"
+
+_COMPLETION_DURATION_KEYS = (
+    "total_duration",
+    "load_duration",
+    "prompt_eval_duration",
+    "eval_duration",
+)
+_COMPLETION_COUNT_KEYS = ("prompt_eval_count", "eval_count")
+_MAX_COMPLETION_DURATION_NS = 7 * 24 * 60 * 60 * 1_000_000_000
+_MAX_COMPLETION_COUNT = 1_000_000_000
+
+
+def _completion_stats(raw: object) -> dict[str, int | float]:
+    """Copy only bounded numeric provider timing fields into public events."""
+
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, int | float] = {}
+    for key in _COMPLETION_DURATION_KEYS:
+        value = raw.get(key)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            continue
+        if isinstance(value, float) and not math.isfinite(value):
+            continue
+        if 0 <= value <= _MAX_COMPLETION_DURATION_NS:
+            out[key] = value
+    for key in _COMPLETION_COUNT_KEYS:
+        value = raw.get(key)
+        if (
+            isinstance(value, int)
+            and not isinstance(value, bool)
+            and 0 <= value <= _MAX_COMPLETION_COUNT
+        ):
+            out[key] = value
+    return out
+
+
+def _has_thinking_progress(raw: object) -> bool:
+    """Detect reasoning progress without exposing hidden reasoning content."""
+
+    if not isinstance(raw, dict):
+        return False
+    message = raw.get("message")
+    if not isinstance(message, dict):
+        return False
+    thinking = message.get("thinking")
+    return isinstance(thinking, str) and bool(thinking)
 
 PreparedExecution = Callable[
     [], tuple[bool, str] | Awaitable[tuple[bool, str]]
@@ -594,6 +642,7 @@ class AgentRunner:
             content = ""
             tool_calls: list[dict] = []
             tool_call_overflow = False
+            completion_stats: dict[str, int | float] = {}
             try:
                 for delta in self._chat_chain.chat(
                     self.agent.model or "",
@@ -603,10 +652,12 @@ class AgentRunner:
                     system=self.agent.system_prompt or None,
                     **self.chat_options,
                 ):
+                    if not content and _has_thinking_progress(delta.raw):
+                        yield {"type": "thinking"}
                     if delta.content:
                         content += delta.content
                         yield {"type": "delta", "content": delta.content}
-                    if delta.tool_calls:
+                    if delta.tool_calls and tools_param is not None:
                         try:
                             for call in delta.tool_calls:
                                 if len(tool_calls) >= MAX_TOOL_CALLS_PER_TURN:
@@ -618,6 +669,7 @@ class AgentRunner:
                         if tool_call_overflow:
                             break
                     if delta.done:
+                        completion_stats = _completion_stats(delta.raw)
                         break
             except ProviderError as e:
                 yield {"type": "error", "message": str(e)}
@@ -701,7 +753,13 @@ class AgentRunner:
                 continue
 
             messages.append({"role": "assistant", "content": content})
-            yield {"type": "done", "content": content, "messages": messages, "iterations": i + 1}
+            yield {
+                "type": "done",
+                "content": content,
+                "messages": messages,
+                "iterations": i + 1,
+                **completion_stats,
+            }
             return
 
         yield {"type": "error", "message": f"agent exceeded {self.max_iterations} tool iterations"}

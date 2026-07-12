@@ -68,6 +68,26 @@ test("agent payload is bound only by project id and never carries cwd or workspa
   assert.equal("workspace" in payload, false);
 });
 
+test("Ask uses the same durable project-bound agent payload", () => {
+  const payload = buildAgentChatPayload({
+    agent: "ask",
+    model: "qwen-local",
+    message: "Remember this thread",
+    messages: [],
+    projectId: "project-1",
+    name: "Local Ask",
+  });
+
+  assert.deepEqual(payload, {
+    agent: "ask",
+    model: "qwen-local",
+    message: "Remember this thread",
+    messages: [],
+    project_id: "project-1",
+    name: "Local Ask",
+  });
+});
+
 test("stale context responses cannot commit after workspace or project changes", () => {
   const request = { key: workbenchContextKey("client-a", "project-a"), generation: 4 };
 

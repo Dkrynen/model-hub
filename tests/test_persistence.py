@@ -67,6 +67,18 @@ def test_save_upsert_new_session(isolated_home):
     assert data["model"] == "m"
 
 
+def test_save_can_refuse_to_resurrect_a_missing_session(isolated_home):
+    saved = persistence.save_session(
+        "deleted-session",
+        model="m",
+        messages=[{"role": "assistant", "content": "late"}],
+        create_if_missing=False,
+    )
+
+    assert saved is False
+    assert persistence.get_session("deleted-session") is None
+
+
 def test_get_missing_session_returns_none(isolated_home):
     assert persistence.get_session("doesnotexist") is None
 

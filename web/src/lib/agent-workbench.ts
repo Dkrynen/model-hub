@@ -1,4 +1,4 @@
-import type { AgentApprovalDecision } from "./types";
+import type { AgentApprovalDecision, SessionMessage } from "./types";
 
 export type WorkbenchMode = "ask" | "plan" | "explore" | "build";
 
@@ -39,7 +39,56 @@ export interface StagedActionFailure {
   description: string;
 }
 
+export interface ChatStats {
+  ttft_ms?: number;
+  load_ms?: number;
+  prompt_ms?: number;
+  eval_ms?: number;
+  eval_count?: number;
+  tokens_per_second?: number;
+}
+
+export interface WorkbenchMessage extends SessionMessage {
+  ephemeral?: boolean;
+}
+
 export const STAGED_SNAPSHOT_LABEL = "Snapshot at staging";
+
+function nsToMs(value: unknown): number | undefined {
+  const n = Number(value ?? 0);
+  if (!Number.isFinite(n) || n <= 0) return undefined;
+  return n / 1_000_000;
+}
+
+export function chatStatsFromEvent(
+  event: Record<string, unknown>,
+  ttftMs?: number
+): ChatStats {
+  const evalMs = nsToMs(event.eval_duration);
+  const evalCount = Number(event.eval_count ?? 0);
+  const tokensPerSecond = evalMs && evalCount > 0
+    ? (evalCount / evalMs) * 1000
+    : undefined;
+  return {
+    ttft_ms: ttftMs,
+    load_ms: nsToMs(event.load_duration),
+    prompt_ms: nsToMs(event.prompt_eval_duration),
+    eval_ms: evalMs,
+    eval_count: evalCount > 0 ? evalCount : undefined,
+    tokens_per_second: tokensPerSecond,
+  };
+}
+
+export function durableTranscript(
+  system: string,
+  messages: readonly WorkbenchMessage[]
+): SessionMessage[] {
+  const durable = messages
+    .filter((message) => !message.ephemeral)
+    .map((message) => ({ role: message.role, content: message.content }));
+  const prompt = system.trim();
+  return prompt ? [{ role: "system", content: prompt }, ...durable] : durable;
+}
 
 export function approvalDecisionIntent(
   approval: { runId: string; askId: string },

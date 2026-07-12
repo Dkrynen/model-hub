@@ -64,10 +64,14 @@ import {
   workbenchControlsDisabled,
   workbenchSendDisabled,
   workbenchSendLabel,
+  chatStatsFromEvent,
+  durableTranscript,
 } from "@/lib/agent-workbench";
 import type {
   ApprovalDecisionIntent,
+  ChatStats,
   SessionActionIdentity,
+  WorkbenchMessage,
 } from "@/lib/agent-workbench";
 import type {
   PsResponse,
@@ -76,24 +80,14 @@ import type {
   ProjectRegistrationInput,
   SessionDetail,
   SessionEvent,
-  SessionMessage,
   SessionSummary,
   StagedChangeDetail,
   StagedChangeSummary,
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-type Msg = SessionMessage;
+type Msg = WorkbenchMessage;
 type Mode = "ask" | "plan" | "explore" | "build";
-
-interface ChatStats {
-  ttft_ms?: number;
-  load_ms?: number;
-  prompt_ms?: number;
-  eval_ms?: number;
-  eval_count?: number;
-  tokens_per_second?: number;
-}
 
 interface WorkbenchEvent {
   type: string;
@@ -242,6 +236,7 @@ export function Chat() {
   const [selectedChange, setSelectedChange] = useState<StagedChangeDetail | null>(null);
   const [changeBusy, setChangeBusy] = useState("");
   const abortRef = useRef<AbortController | null>(null);
+  const runInFlightRef = useRef(false);
   const approvalRef = useRef(initialApprovalState);
   const approvalLockRef = useRef("");
   const changeBusyRef = useRef("");
@@ -305,7 +300,14 @@ export function Chat() {
     abortRef.current = null;
     controller?.abort();
     resetApproval();
-    setStreaming(false);
+  };
+
+  const cancelActiveRun = () => {
+    cancelRunThenAbort(
+      approvalRef.current.run,
+      (runId, approvalToken) => api.cancelAgentRun(runId, approvalToken),
+      invalidateActiveRun
+    );
   };
 
   const clearStagedContext = () => {
@@ -318,7 +320,7 @@ export function Chat() {
   };
 
   const beginSessionContext = (sessionId: string) => {
-    invalidateActiveRun();
+    cancelActiveRun();
     clearStagedContext();
     selectSession(sessionId);
     return sessionGenerationRef.current;
@@ -583,11 +585,7 @@ export function Chat() {
     registeringProjectRef.current = false;
     setRegisteringProject(false);
     cancelSessionLoad();
-    cancelRunThenAbort(
-      approvalRef.current.run,
-      (runId, approvalToken) => api.cancelAgentRun(runId, approvalToken),
-      invalidateActiveRun
-    );
+    cancelActiveRun();
     clearStagedContext();
     selectSession("");
     sandboxRequestSequenceRef.current += 1;
@@ -684,7 +682,7 @@ export function Chat() {
 
   const send = async (text: string) => {
     const trimmed = text.trim();
-    if (sessionLoadingRef.current) return;
+    if (sessionLoadingRef.current || runInFlightRef.current) return;
     if (!model) {
       toast.error("Select a model first");
       return;
@@ -698,11 +696,16 @@ export function Chat() {
 
     const runMode = mode;
     const generation = ++runGenerationRef.current;
-    const prior = transcriptWithSystem(system, messages);
+    const prior = durableTranscript(system, messages);
     const assistantIndex = messages.length + 1;
     const initialAssistant = runMode === "ask" ? "" : `${modeLabel(runMode)} agent starting...`;
-    setMessages([...messages, { role: "user", content: trimmed }, { role: "assistant", content: initialAssistant }]);
+    setMessages([
+      ...messages,
+      { role: "user", content: trimmed },
+      { role: "assistant", content: initialAssistant, ephemeral: true },
+    ]);
     setInput("");
+    runInFlightRef.current = true;
     setStreaming(true);
     setLastStats(null);
     resetApproval();
@@ -717,62 +720,26 @@ export function Chat() {
     abortRef.current = ac;
 
     try {
-      if (runMode === "ask") {
-        await streamPlainChat(trimmed, prior, assistantIndex, generation, ac.signal);
-      } else {
-        await streamAgentChat(
-          trimmed,
-          prior,
-          assistantIndex,
-          runMode,
-          runProjectId,
-          generation,
-          ac.signal
-        );
-      }
+      await streamAgentChat(
+        trimmed,
+        prior,
+        assistantIndex,
+        runMode,
+        runProjectId,
+        generation,
+        ac.signal
+      );
     } catch (e) {
       if (isActiveRun(generation) && (e as Error).name !== "AbortError") {
         toast.error("Workbench error", { description: e instanceof Error ? e.message : String(e) });
       }
     } finally {
-      if (isActiveRun(generation)) {
+      runInFlightRef.current = false;
+      if (mountedRef.current) {
         setStreaming(false);
-        if (abortRef.current === ac) abortRef.current = null;
         sessions.reload();
       }
-    }
-  };
-
-  const streamPlainChat = async (
-    text: string,
-    prior: Msg[],
-    assistantIndex: number,
-    generation: number,
-    signal: AbortSignal
-  ) => {
-    const history = [...prior, { role: "user", content: text }];
-    let acc = "";
-    const startedAt = performance.now();
-    let ttftMs: number | undefined;
-
-    for await (const ev of api.chat(model, history as { role: string; content: string }[], signal)) {
-      if (!isActiveRun(generation)) return;
-      if (ev.error) throw new Error(String(ev.error));
-      const message = ev.message as { content?: string; thinking?: string } | undefined;
-      const delta = message?.content ?? "";
-      const thinking = message?.thinking ?? "";
-      if (thinking && !acc) {
-        ttftMs ??= performance.now() - startedAt;
-        replaceAssistant(assistantIndex, "Thinking...", generation);
-      }
-      if (delta) {
-        ttftMs ??= performance.now() - startedAt;
-        acc += delta;
-        replaceAssistant(assistantIndex, acc, generation);
-      }
-      if (ev.done === true) {
-        commitRunStats(chatStatsFromEvent(ev, ttftMs), generation);
-      }
+      if (abortRef.current === ac) abortRef.current = null;
     }
   };
 
@@ -780,7 +747,7 @@ export function Chat() {
     text: string,
     prior: Msg[],
     assistantIndex: number,
-    agent: Exclude<Mode, "ask">,
+    agent: Mode,
     projectId: string,
     generation: number,
     signal: AbortSignal
@@ -788,6 +755,8 @@ export function Chat() {
     let acc = "";
     let streamRunId = "";
     let streamSessionId = activeSessionRef.current;
+    const startedAt = performance.now();
+    let ttftMs: number | undefined;
 
     try {
       for await (const ev of api.agentChat(
@@ -862,17 +831,41 @@ export function Chat() {
           appendRunEvent(eventFromRaw(ev), generation);
           void refreshStagedChanges(streamSessionId, true);
         } else if (type === "status") {
-          const event = eventFromRaw(ev);
-          appendRunEvent(event, generation);
-          if (!acc) replaceAssistant(assistantIndex, `${event.message || "Agent started"}...`, generation);
+          if (agent !== "ask") {
+            const event = eventFromRaw(ev);
+            appendRunEvent(event, generation);
+            if (!acc) {
+              replaceAssistant(
+                assistantIndex,
+                `${event.message || "Agent started"}...`,
+                generation,
+                true
+              );
+            }
+          }
+        } else if (type === "thinking" && agent === "ask" && !acc) {
+          ttftMs ??= performance.now() - startedAt;
+          replaceAssistant(assistantIndex, "Thinking...", generation, true);
         } else if (type === "delta") {
-          acc += String(ev.content ?? "");
+          const delta = String(ev.content ?? "");
+          if (agent === "ask" && delta) ttftMs ??= performance.now() - startedAt;
+          acc += delta;
           replaceAssistant(assistantIndex, acc, generation);
         } else if (type === "tool_call" || type === "tool_result" || type === "tool_calls") {
           appendRunEvent(eventFromRaw(ev), generation);
         } else if (type === "done") {
           acc = String(ev.content ?? acc);
-          replaceAssistant(assistantIndex, acc, generation);
+          replaceAssistant(
+            assistantIndex,
+            acc || (agent === "ask" && ttftMs !== undefined
+              ? "No response text returned."
+              : acc),
+            generation,
+            !acc
+          );
+          if (agent === "ask") {
+            commitRunStats(chatStatsFromEvent(ev, ttftMs), generation);
+          }
         } else if (type === "error") {
           const event = eventFromRaw(ev);
           appendRunEvent(event, generation);
@@ -890,12 +883,17 @@ export function Chat() {
     }
   };
 
-  const replaceAssistant = (index: number, content: string, generation: number) => {
+  const replaceAssistant = (
+    index: number,
+    content: string,
+    generation: number,
+    ephemeral = false
+  ) => {
     if (!isActiveRun(generation)) return;
     setMessages((prev) => {
       if (!isActiveRun(generation)) return prev;
       const next = [...prev];
-      next[index] = { role: "assistant", content };
+      next[index] = { role: "assistant", content, ...(ephemeral ? { ephemeral: true } : {}) };
       return next;
     });
   };
@@ -1106,15 +1104,14 @@ export function Chat() {
 
   const stop = () => {
     const sessionId = activeSessionRef.current;
-    cancelRunThenAbort(
-      approvalRef.current.run,
-      (runId, approvalToken) => api.cancelAgentRun(runId, approvalToken),
-      invalidateActiveRun
-    );
+    cancelActiveRun();
     if (sessionId) void refreshStagedChanges(sessionId, true);
   };
   const clear = () => {
+    cancelSessionLoad();
     stop();
+    clearStagedContext();
+    selectSession("");
     setMessages([]);
     setEvents([]);
     setLastStats(null);
@@ -1846,11 +1843,6 @@ function splitSystem(detail: SessionDetail): { system: string; messages: Msg[] }
   };
 }
 
-function transcriptWithSystem(system: string, messages: Msg[]): Msg[] {
-  const prompt = system.trim();
-  return prompt ? [{ role: "system", content: prompt }, ...messages] : [...messages];
-}
-
 function eventFromStored(event: SessionEvent): WorkbenchEvent {
   return eventFromRaw({ type: event.type, ...event.payload, timestamp: event.timestamp });
 }
@@ -1897,26 +1889,6 @@ function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function nsToMs(value: unknown): number | undefined {
-  const n = Number(value ?? 0);
-  if (!Number.isFinite(n) || n <= 0) return undefined;
-  return n / 1_000_000;
-}
-
-function chatStatsFromEvent(ev: Record<string, unknown>, ttftMs?: number): ChatStats {
-  const evalMs = nsToMs(ev.eval_duration);
-  const evalCount = Number(ev.eval_count ?? 0);
-  const tokensPerSecond = evalMs && evalCount > 0 ? (evalCount / evalMs) * 1000 : undefined;
-  return {
-    ttft_ms: ttftMs,
-    load_ms: nsToMs(ev.load_duration),
-    prompt_ms: nsToMs(ev.prompt_eval_duration),
-    eval_ms: evalMs,
-    eval_count: evalCount > 0 ? evalCount : undefined,
-    tokens_per_second: tokensPerSecond,
-  };
 }
 
 function formatMs(ms: number | undefined): string | null {
