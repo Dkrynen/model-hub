@@ -15,6 +15,7 @@ import { Badge, type BadgeProps } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import type { ProStatus } from "@/lib/types";
+import { proPlanPresentation } from "@/lib/pro-entitlements";
 
 export const PRO_WAITLIST_URL = "https://tally.so/r/GxyBx2";
 
@@ -87,8 +88,17 @@ export function ProductSpine({
   status?: ProStatus | null;
 }) {
   const statusLabel = licensed ? "Activated" : "Key gated";
-  const planLabel = licensed ? status?.plan ?? "LAC Pro" : "$3/mo annual target";
-  const purchaseLabel = licensed ? "License active" : "Launch pending";
+  const planPresentation = proPlanPresentation(status?.plan);
+  const planLabel = licensed ? planPresentation.label : "Local Pro - $36/year";
+  const planDetail =
+    licensed && planPresentation.kind === "cloud"
+      ? "Pro Cloud is planned at $20/month and includes Local Pro."
+      : licensed && planPresentation.kind === "development"
+        ? "Development override is active for this source build."
+        : licensed && planPresentation.kind === "unknown"
+          ? "Subscription details are unavailable for this plan."
+          : "Local Pro is planned at $36/year.";
+  const purchaseLabel = licensed ? "License active" : "Not available yet";
 
   return (
     <Card className="overflow-hidden">
@@ -104,6 +114,9 @@ export function ProductSpine({
             <p className="mt-2 text-[13px] leading-relaxed text-fg-muted">
               Pro is the monetized layer for people who want LAC to do work: measured speed,
               private model supply, tuning automation, and a coding cockpit for stronger local models.
+              Pro Cloud is the planned $20/month higher tier. It includes everything in Local Pro,
+              plus encrypted sync and capped hosted agents, and is not yet available. Every paid
+              checkout will start from a Google or GitHub LAC account.
             </p>
           </div>
           {!licensed && (
@@ -116,9 +129,9 @@ export function ProductSpine({
         </div>
       </div>
       <div className="grid border-b border-line md:grid-cols-3">
-        <Metric icon={Sparkles} label="Plan" value={planLabel} detail="Low-friction paid add-on." />
+        <Metric icon={Sparkles} label="Plan" value={planLabel} detail={planDetail} />
         <Metric icon={KeyRound} label="Delivery" value={statusLabel} detail="License key installs the private plugin locally." />
-        <Metric icon={LockKeyhole} label="Purchase" value={purchaseLabel} detail="Checkout opens after final delivery proof." />
+        <Metric icon={LockKeyhole} label="Purchase" value={purchaseLabel} detail="Account-bound checkout opens only after all launch gates." />
       </div>
       <div className="p-5">
         <div className="flex items-center gap-2 text-sm font-semibold">
@@ -130,7 +143,7 @@ export function ProductSpine({
             <div className="grid grid-cols-[1fr_1.2fr_1.5fr_120px] bg-panel-2 px-4 py-2 text-[11px] font-semibold uppercase text-fg-muted">
               <div>Capability</div>
               <div>Free</div>
-              <div>Pro</div>
+              <div>Local Pro</div>
               <div>Status</div>
             </div>
             {CAPABILITIES.map((capability) => {

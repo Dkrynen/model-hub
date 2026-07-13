@@ -35,9 +35,9 @@ lac chat          # TUI chat
 
 Coming soon — **[join the waitlist](https://dkrynen.github.io/lac/)** and each platform release lands in your inbox.
 
-## LAC Pro - the Tuning Cockpit
+## Local Pro - the Tuning Cockpit
 
-The free tier is complete and stays free. **LAC Pro** adds the paid power tools:
+The free tier is complete and stays free. **Local Pro** adds the paid power tools:
 
 - **Autopilot** - after Pro is installed and licensed, supported model installs can be benchmarked, GPU-offload swept, and tuned to your exact rig
 - **`lac pro tune <model>` / `lac pro benchmark <model>`** - manual on-demand re-runs of the same sweep and benchmark steps autopilot uses
@@ -45,9 +45,11 @@ The free tier is complete and stays free. **LAC Pro** adds the paid power tools:
 - **Local coding cockpit** - readiness checks and launch guidance for stronger coding models and agent workflows
 - **Insights** - calibration history and regression detection ("your tok/s dropped 12% since that driver update")
 
-Planned at **$3/month billed annually**. Checkout opens after the final delivery and payment smoke test; the [waitlist](https://dkrynen.github.io/lac/) hears first.
+Local Pro is planned at **$36/year** (the equivalent of $3/month). Checkout is **not open yet**; the [waitlist](https://dkrynen.github.io/lac/) hears first.
 
-**At public launch,** Polar will email a license key after checkout. Run `lac unlock <key>` or use **Settings -> Activate Pro** in the web UI; LAC downloads the private Pro plugin and activates this machine with that same key. Restart LAC after activation so the Pro cockpit mounts cleanly. Free installs ship no Pro code.
+**Pro Cloud** is the planned **$20/month** higher tier. It includes everything in Local Pro, plus end-to-end encrypted sync and capped hosted agents. Encrypted sync is designed so LAC cannot read the ciphertext. Hosted processing is a separate, explicit path: only selected job inputs are decrypted for execution and may be sent to approved model providers. It is **not yet available**: checkout, hosted usage, quotas, and cloud entitlements must not be treated as live.
+
+**At launch,** every paid buyer first signs in to a LAC account with Google or GitHub. Checkout starts from that authenticated account, and access follows the signed Polar webhook rather than the browser redirect. Polar then provides the Local Pro license key. Run `lac unlock <key>` or use **Settings -> Activate Pro** in the web UI; after activation the Local Pro runtime remains key-based and local. Restart LAC so the Pro cockpit mounts cleanly. Free installs ship no Pro code.
 
 ## Hardware detection
 

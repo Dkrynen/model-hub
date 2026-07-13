@@ -573,9 +573,11 @@ export interface ImportScratchClearResponse {
   error?: string;
 }
 
+export type ProPlan = "pro" | "pro_local" | "pro_cloud" | "dev";
+
 export interface ProStatus {
   licensed: boolean;
-  plan?: string | null;
+  plan?: ProPlan | null;
   expires_human?: string | null;
   machine?: string | null;
   checked?: string | null;

@@ -3,7 +3,7 @@
 ; Then compile: iscc installer.iss
 
 #define MyAppName "LAC"
-#define MyAppVersion "2.6.4"
+#define MyAppVersion "2.7.0"
 #define MyAppPublisher "Duan Krynen"
 #define MyAppURL "https://github.com/Dkrynen/lac"
 #define MyAppExeName "lac.exe"

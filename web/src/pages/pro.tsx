@@ -9,6 +9,7 @@ import { ProductSpine } from "@/components/pro/product-spine";
 import { TuneHero } from "@/components/pro/tune-hero";
 import { api } from "@/lib/api";
 import { useAsync } from "@/lib/hooks";
+import { proPlanPresentation } from "@/lib/pro-entitlements";
 
 export function Pro() {
   const status = useAsync(() => api.proStatus());
@@ -35,7 +36,7 @@ export function Pro() {
     <>
       <PageHeader
         title="LAC Pro"
-        subtitle={`Active - ${status.data?.plan ?? "pro"} - ${status.data?.expires_human ?? ""}`}
+        subtitle={`Active - ${proPlanPresentation(status.data?.plan).label} - ${status.data?.expires_human ?? ""}`}
       />
       <div className="grid gap-5">
         <ProductSpine licensed status={status.data} />

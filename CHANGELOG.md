@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- **2.7.0 release candidate** - Staged the two-tier Local Pro/Pro Cloud contracts, mandatory artifact integrity, hardened delivery gate, enterprise CI gates, and fail-closed Authenticode release workflow. This remains unreleased until the IP, signing, paid-platform, audit, beta, and external-review gates pass.
 - **Import preflight smoke** - Added a cheap `live_import_stress.py --preflight-only` mode and wired it into the public-readiness live lane so GGUF preflight, Pro resolver, and HF token route shape are checked before any slow import.
 - **Live import stress timing** - Raised the slow import stress defaults and public-readiness gate wiring to match the installed-app HF import/delete smoke timing observed on Windows.
 - **Strict release match** - `release_readiness.py --strict-public-match` now requires the latest public tag, installer size, and `SHA256SUMS.txt` entry to match the local app build.

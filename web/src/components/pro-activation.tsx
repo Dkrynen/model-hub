@@ -3,6 +3,7 @@ import { CheckCircle2, ExternalLink, Sparkles } from "lucide-react";
 import { api } from "@/lib/api";
 import { useAsync } from "@/lib/hooks";
 import type { ProStatus } from "@/lib/types";
+import { proPlanPresentation } from "@/lib/pro-entitlements";
 import { PRO_WAITLIST_URL, UnlockList } from "@/components/pro/product-spine";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -25,6 +26,7 @@ export function ProActivation({ embedded = false }: { embedded?: boolean }) {
   const [error, setError] = useState<string | null>(null);
   const [celebrating, setCelebrating] = useState(false);
   const [relaunching, setRelaunching] = useState(false);
+  const plan = proPlanPresentation(status.data?.plan);
 
   const activate = async () => {
     setActivating(true);
@@ -81,11 +83,11 @@ export function ProActivation({ embedded = false }: { embedded?: boolean }) {
           <>
             <p className="mt-0.5 flex items-center gap-1.5 text-[13px] text-fg-muted">
               <Badge variant="success">Active</Badge>
-              {status.data.plan ?? "LAC Pro"}
+              {plan.label}
             </p>
             <dl className="mt-4 grid grid-cols-[auto_1fr] gap-x-6 gap-y-2 text-[13px]">
               <dt className="text-fg-muted">Plan</dt>
-              <dd className="font-mono">{status.data.plan ?? "-"}</dd>
+              <dd className="font-mono">{plan.label}</dd>
               <dt className="text-fg-muted">Expires</dt>
               <dd className="font-mono">{status.data.expires_human ?? "-"}</dd>
               <dt className="text-fg-muted">Machine</dt>
@@ -97,11 +99,15 @@ export function ProActivation({ embedded = false }: { embedded?: boolean }) {
         ) : (
           <>
             <p className="mt-0.5 text-[13px] text-fg-muted">
-              Pro checkout is opening after the final delivery smoke. Already have a license key?
-              Activate it below.
+              Local Pro is planned at $36/year, but checkout is not open yet. Already have a
+              Local Pro license key? Activate it below.
             </p>
             <div className="mt-3 rounded border border-line bg-panel-2 p-3 text-[12px] leading-relaxed text-fg-muted">
-              Free installs ship no Pro code. A valid key downloads the private plugin locally.
+              Free installs ship no Pro code. A valid Local Pro key downloads the private plugin
+              locally. Pro Cloud is the planned $20/month higher tier: it includes everything in
+              Local Pro, plus encrypted sync and capped hosted agents. It is not yet available.
+              Every paid checkout will require a Google or GitHub LAC account; the checkout
+              redirect itself will never grant access.
             </div>
             <div className="mt-4">
               <label className="block">
