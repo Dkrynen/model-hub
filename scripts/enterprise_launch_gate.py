@@ -256,10 +256,17 @@ def _b64decode(value: object) -> bytes:
     return decoded
 
 
-def evidence_signature_payload(gate: str, release_version: str, record: dict[str, Any]) -> bytes:
+def evidence_signature_payload(
+    gate: str, release_scope: str, release_version: str, record: dict[str, Any],
+) -> bytes:
     signed = {key: value for key, value in record.items() if key != "signature"}
     return json.dumps(
-        {"gate": gate, "release_version": release_version, "record": signed},
+        {
+            "gate": gate,
+            "record": signed,
+            "release_scope": release_scope,
+            "release_version": release_version,
+        },
         ensure_ascii=True,
         separators=(",", ":"),
         sort_keys=True,
@@ -268,6 +275,7 @@ def evidence_signature_payload(gate: str, release_version: str, record: dict[str
 
 def _verify_evidence_record(
     name: str,
+    release_scope: str,
     release_version: str,
     record: object,
     *,
@@ -278,19 +286,23 @@ def _verify_evidence_record(
     expected_provenance_sha256: str,
     now: float,
 ) -> bool:
-    expected_fields = (
-        _HOSTED_JOURNEY_EVIDENCE_FIELDS if name == "hosted_agent_end_to_end"
-        else _MEASURED_WORKER_EVIDENCE_FIELDS if name == "regional_latency_slo"
-        else _WORKER_EVIDENCE_FIELDS if name in _WORKER_BOUND_EVIDENCE_GATES
-        else _EVIDENCE_RECORD_FIELDS
-    )
+    if release_scope == "local":
+        expected_fields = _LOCAL_EVIDENCE_RECORD_FIELDS
+    else:
+        expected_fields = (
+            _HOSTED_JOURNEY_EVIDENCE_FIELDS if name == "hosted_agent_end_to_end"
+            else _MEASURED_WORKER_EVIDENCE_FIELDS if name == "regional_latency_slo"
+            else _WORKER_EVIDENCE_FIELDS if name in _WORKER_BOUND_EVIDENCE_GATES
+            else _EVIDENCE_RECORD_FIELDS
+        )
     if not isinstance(record, dict) or set(record) != expected_fields:
         return False
     expected_commits = {
         "model_hub_commit": expected_model_hub_commit,
         "lac_pro_commit": expected_lac_pro_commit,
-        "lac_cloud_commit": expected_lac_cloud_commit,
     }
+    if release_scope != "local":
+        expected_commits["lac_cloud_commit"] = expected_lac_cloud_commit
     expected_artifacts = {
         "installer_sha256": expected_installer_sha256,
         "release_provenance_sha256": expected_provenance_sha256,
@@ -360,7 +372,7 @@ def _verify_evidence_record(
             return False
         Ed25519PublicKey.from_public_bytes(public_key).verify(
             signature,
-            evidence_signature_payload(name, release_version, record),
+            evidence_signature_payload(name, release_scope, release_version, record),
         )
     except (InvalidSignature, TypeError, ValueError):
         return False
@@ -403,6 +415,7 @@ def _hosted_journey_objects_valid(evidence_path: Path, record: object) -> bool:
 
 def check_evidence(
     path: Path,
+    release_scope: str,
     expected_version: str,
     *,
     expected_model_hub_commit: str = "",
@@ -412,6 +425,7 @@ def check_evidence(
     expected_provenance_sha256: str = "",
     now: float | None = None,
 ) -> list[dict[str, Any]]:
+    required = EVIDENCE_GATES_BY_SCOPE[release_scope]
     missing = [
         _result(
             f"evidence_{name}",
@@ -419,7 +433,7 @@ def check_evidence(
             "evidence manifest is missing",
             lane="external_evidence",
         )
-        for name in REQUIRED_EVIDENCE_GATES
+        for name in required
     ]
     try:
         if (
@@ -438,22 +452,24 @@ def check_evidence(
             for row in missing
         ]
     if not isinstance(document, dict) or set(document) != {
-        "schema_version", "release_version", "gates",
+        "schema_version", "release_scope", "release_version", "gates",
     }:
         return [{**row, "detail": "evidence manifest is invalid"} for row in missing]
     version_ok = (
-        document.get("schema_version") == 2
+        document.get("schema_version") == EVIDENCE_SCHEMA_VERSION
+        and document.get("release_scope") == release_scope
         and document.get("release_version") == expected_version
     )
     gates = document.get("gates")
-    if not isinstance(gates, dict) or set(gates) != set(REQUIRED_EVIDENCE_GATES):
+    if not isinstance(gates, dict) or set(gates) != set(required):
         gates = {}
     current = time.time() if now is None else now
     verified: dict[str, bool] = {}
-    for name in REQUIRED_EVIDENCE_GATES:
+    for name in required:
         record = gates.get(name)
         verified[name] = version_ok and _verify_evidence_record(
             name,
+            release_scope,
             expected_version,
             record,
             expected_model_hub_commit=expected_model_hub_commit,
@@ -463,27 +479,28 @@ def check_evidence(
             expected_provenance_sha256=expected_provenance_sha256,
             now=current,
         )
-    if verified.get("hosted_agent_end_to_end") and not _hosted_journey_objects_valid(
-        path, gates.get("hosted_agent_end_to_end"),
-    ):
-        verified["hosted_agent_end_to_end"] = False
-    deployment_records = [
-        gates.get(name) for name in _PRODUCTION_DEPLOYMENT_EVIDENCE_GATES
-    ]
-    if all(verified.get(name) for name in _PRODUCTION_DEPLOYMENT_EVIDENCE_GATES):
-        expected_binding = tuple(
-            deployment_records[0].get(field) for field in _WORKER_BINDING_FIELDS
-        )
-        bindings_match = all(
-            tuple(record.get(field) for field in _WORKER_BINDING_FIELDS)
-            == expected_binding
-            for record in deployment_records[1:]
-        )
-        if not bindings_match:
-            for name in _PRODUCTION_DEPLOYMENT_EVIDENCE_GATES:
-                verified[name] = False
+    if release_scope == "cloud":
+        if verified.get("hosted_agent_end_to_end") and not _hosted_journey_objects_valid(
+            path, gates.get("hosted_agent_end_to_end"),
+        ):
+            verified["hosted_agent_end_to_end"] = False
+        deployment_records = [
+            gates.get(name) for name in _PRODUCTION_DEPLOYMENT_EVIDENCE_GATES
+        ]
+        if all(verified.get(name) for name in _PRODUCTION_DEPLOYMENT_EVIDENCE_GATES):
+            expected_binding = tuple(
+                deployment_records[0].get(field) for field in _WORKER_BINDING_FIELDS
+            )
+            bindings_match = all(
+                tuple(record.get(field) for field in _WORKER_BINDING_FIELDS)
+                == expected_binding
+                for record in deployment_records[1:]
+            )
+            if not bindings_match:
+                for name in _PRODUCTION_DEPLOYMENT_EVIDENCE_GATES:
+                    verified[name] = False
     rows: list[dict[str, Any]] = []
-    for name in REQUIRED_EVIDENCE_GATES:
+    for name in required:
         record_ok = verified[name]
         rows.append(_result(
             f"evidence_{name}",
@@ -1173,6 +1190,7 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
         ),
         *check_evidence(
             args.evidence,
+            "cloud",
             APP_VERSION,
             expected_model_hub_commit=source_commit,
             expected_lac_pro_commit=pro_source_commit,

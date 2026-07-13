@@ -106,7 +106,10 @@ def _trust_evidence_signer(gate, private_key, monkeypatch) -> None:
     })
 
 
-def _check_evidence(gate, path: Path, *, expected_version: str = "2.7.0", **overrides):
+def _check_evidence(
+    gate, path: Path, *, release_scope: str = "cloud",
+    expected_version: str = "2.7.0", **overrides,
+):
     expected = {
         "expected_model_hub_commit": MODEL_HUB_COMMIT,
         "expected_lac_pro_commit": LAC_PRO_COMMIT,
@@ -116,7 +119,7 @@ def _check_evidence(gate, path: Path, *, expected_version: str = "2.7.0", **over
         "now": NOW,
     }
     expected.update(overrides)
-    return gate.check_evidence(path, expected_version, **expected)
+    return gate.check_evidence(path, release_scope, expected_version, **expected)
 
 
 def _release_fixture(tmp_path: Path, gate) -> dict[str, object]:
@@ -212,7 +215,8 @@ def _valid_evidence(
     gate,
     private_key: Ed25519PrivateKey,
     *,
-    hosted_digests: dict[str, str],
+    hosted_digests: dict[str, str] | None = None,
+    release_scope: str = "cloud",
     model_hub_commit: str = MODEL_HUB_COMMIT,
     lac_pro_commit: str = LAC_PRO_COMMIT,
     lac_cloud_commit: str = CLOUD_COMMIT,
@@ -225,11 +229,14 @@ def _valid_evidence(
     hosted_versions: dict[str, str] | None = None,
 ) -> dict:
     document = {
-        "schema_version": 2,
+        "schema_version": 3,
+        "release_scope": release_scope,
         "release_version": "2.7.0",
         "gates": {},
     }
-    for index, name in enumerate(gate.REQUIRED_EVIDENCE_GATES, start=1):
+    for index, name in enumerate(
+        gate.EVIDENCE_GATES_BY_SCOPE[release_scope], start=1,
+    ):
         record = {
             "status": "verified",
             "approver": "independent-reviewer",
@@ -243,6 +250,8 @@ def _valid_evidence(
             "installer_sha256": installer_sha256,
             "release_provenance_sha256": provenance_sha256,
         }
+        if release_scope == "local":
+            del record["lac_cloud_commit"]
         if name == "cloud_staging_smoke":
             record.update(staging_versions)
         elif name in gate._PRODUCTION_DEPLOYMENT_EVIDENCE_GATES:
@@ -255,8 +264,10 @@ def _valid_evidence(
         if name in {"regional_latency_slo", "hosted_agent_end_to_end"}:
             record["measured_at"] = measured_at
         if name == "hosted_agent_end_to_end":
-            record.update(hosted_digests)
-        signature = private_key.sign(gate.evidence_signature_payload(name, "2.7.0", record))
+            record.update(hosted_digests or {})
+        signature = private_key.sign(
+            gate.evidence_signature_payload(name, release_scope, "2.7.0", record)
+        )
         record["signature"] = base64.urlsafe_b64encode(signature).rstrip(b"=").decode("ascii")
         document["gates"][name] = record
     return document
@@ -265,7 +276,7 @@ def _valid_evidence(
 def test_missing_evidence_fails_every_external_gate(tmp_path):
     gate = _load_gate()
 
-    rows = gate.check_evidence(tmp_path / "missing.json", "2.7.0")
+    rows = gate.check_evidence(tmp_path / "missing.json", "cloud", "2.7.0")
 
     assert {row["name"] for row in rows if not row["ok"]} == {
         f"evidence_{name}" for name in gate.REQUIRED_EVIDENCE_GATES
@@ -289,7 +300,7 @@ def test_valid_evidence_requires_scoped_signature_exact_release_and_fresh_record
     evidence["schema_version"] = 1
     path.write_text(json.dumps(evidence), encoding="utf-8")
     assert all(not row["ok"] for row in _check_evidence(gate, path))
-    evidence["schema_version"] = 2
+    evidence["schema_version"] = 3
     evidence["gates"]["patent_clearance"]["reference"] = "tampered-reference"
     path.write_text(json.dumps(evidence), encoding="utf-8")
     assert next(
@@ -595,7 +606,7 @@ def test_build_report_derives_and_passes_exact_evidence_subject_bindings(
         assert git_args == ("rev-parse", "HEAD")
         return subprocess.CompletedProcess(git_args, 0, commits[repo] + "\n", "")
 
-    def fake_evidence(path, version, **expected):
+    def fake_evidence(path, release_scope, version, **expected):
         captured.update(expected)
         return []
 
@@ -957,3 +968,89 @@ def test_local_scope_membership_is_an_exact_subset_with_max_ages():
             "installer_sha256", "release_provenance_sha256",
         }
     )
+
+
+def test_signature_payload_binds_release_scope():
+    gate = _load_gate()
+    record = {"status": "verified"}
+
+    local = gate.evidence_signature_payload(
+        "patent_clearance", "local", "2.7.0", record,
+    )
+    cloud = gate.evidence_signature_payload(
+        "patent_clearance", "cloud", "2.7.0", record,
+    )
+
+    assert local != cloud
+    assert b'"release_scope":"local"' in local
+    assert b'"release_scope":"cloud"' in cloud
+
+
+def test_local_scope_evidence_passes_with_zero_cloud_evidence(tmp_path, monkeypatch):
+    gate = _load_gate()
+    path = tmp_path / "evidence.json"
+    private_key = Ed25519PrivateKey.generate()
+    _trust_evidence_signer(gate, private_key, monkeypatch)
+    evidence = _valid_evidence(gate, private_key, release_scope="local")
+    path.write_text(json.dumps(evidence), encoding="utf-8")
+
+    rows = _check_evidence(
+        gate, path, release_scope="local", expected_lac_cloud_commit="",
+    )
+
+    assert {row["name"] for row in rows} == {
+        f"evidence_{name}" for name in gate.LOCAL_EVIDENCE_GATES
+    }
+    assert all(row["ok"] for row in rows)
+    assert all(
+        "lac_cloud_commit" not in record
+        for record in evidence["gates"].values()
+    )
+
+
+def test_local_and_cloud_manifests_cannot_cross_authorize(tmp_path, monkeypatch):
+    gate = _load_gate()
+    path = tmp_path / "evidence.json"
+    private_key = Ed25519PrivateKey.generate()
+    _trust_evidence_signer(gate, private_key, monkeypatch)
+
+    local_manifest = _valid_evidence(gate, private_key, release_scope="local")
+    path.write_text(json.dumps(local_manifest), encoding="utf-8")
+    assert all(not row["ok"] for row in _check_evidence(gate, path))
+
+    digests = _write_hosted_evidence_objects(path)
+    cloud_manifest = _valid_evidence(gate, private_key, hosted_digests=digests)
+    path.write_text(json.dumps(cloud_manifest), encoding="utf-8")
+    assert all(not row["ok"] for row in _check_evidence(
+        gate, path, release_scope="local", expected_lac_cloud_commit="",
+    ))
+
+    forged = _valid_evidence(gate, private_key, release_scope="local")
+    forged["release_scope"] = "cloud"
+    forged["gates"] = {
+        name: forged["gates"].get(name)
+        for name in gate.REQUIRED_EVIDENCE_GATES
+        if forged["gates"].get(name) is not None
+    }
+    path.write_text(json.dumps(forged), encoding="utf-8")
+    assert all(not row["ok"] for row in _check_evidence(gate, path))
+
+
+def test_schema_v2_manifests_fail_closed_in_both_scopes(tmp_path, monkeypatch):
+    gate = _load_gate()
+    path = tmp_path / "evidence.json"
+    private_key = Ed25519PrivateKey.generate()
+    _trust_evidence_signer(gate, private_key, monkeypatch)
+    digests = _write_hosted_evidence_objects(path)
+
+    cloud_manifest = _valid_evidence(gate, private_key, hosted_digests=digests)
+    cloud_manifest["schema_version"] = 2
+    path.write_text(json.dumps(cloud_manifest), encoding="utf-8")
+    assert all(not row["ok"] for row in _check_evidence(gate, path))
+
+    local_manifest = _valid_evidence(gate, private_key, release_scope="local")
+    local_manifest["schema_version"] = 2
+    path.write_text(json.dumps(local_manifest), encoding="utf-8")
+    assert all(not row["ok"] for row in _check_evidence(
+        gate, path, release_scope="local", expected_lac_cloud_commit="",
+    ))
