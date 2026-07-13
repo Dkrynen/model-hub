@@ -1054,3 +1054,80 @@ def test_schema_v2_manifests_fail_closed_in_both_scopes(tmp_path, monkeypatch):
     assert all(not row["ok"] for row in _check_evidence(
         gate, path, release_scope="local", expected_lac_cloud_commit="",
     ))
+
+
+def test_release_scope_defaults_to_cloud():
+    gate = _load_gate()
+
+    args = gate.parse_args([])
+    assert args.release_scope == "cloud"
+    assert gate.parse_args(["--release-scope", "local"]).release_scope == "local"
+
+
+def test_local_scope_report_omits_cloud_lanes_and_binds_scope(tmp_path):
+    gate = _load_gate()
+    model = _repo(tmp_path, "model-hub")
+    pro = _repo(tmp_path, "lac-pro")
+
+    rc = gate.main([
+        "--release-scope", "local",
+        "--repo-root", str(model),
+        "--lac-pro-root", str(pro),
+        "--lac-cloud-root", str(tmp_path / "does-not-exist"),
+        "--evidence", str(tmp_path / "missing.json"),
+        "--installer", str(tmp_path / "missing-installer.exe"),
+    ])
+    assert rc == 1
+
+
+def test_local_scope_report_content(tmp_path, capsys):
+    gate = _load_gate()
+    model = _repo(tmp_path, "model-hub")
+    pro = _repo(tmp_path, "lac-pro")
+
+    gate.main([
+        "--release-scope", "local",
+        "--repo-root", str(model),
+        "--lac-pro-root", str(pro),
+        "--lac-cloud-root", str(tmp_path / "does-not-exist"),
+        "--evidence", str(tmp_path / "missing.json"),
+        "--installer", str(tmp_path / "missing-installer.exe"),
+    ])
+
+    report = json.loads(capsys.readouterr().out)
+    assert report["schema_version"] == 2
+    assert report["release_scope"] == "local"
+    names = [row["name"] for row in report["checks"]]
+    lanes = {row["lane"] for row in report["checks"]}
+    assert not any(name.startswith("lac_cloud_") for name in names)
+    assert "cloud_product" not in lanes
+    assert {
+        f"evidence_{name}" for name in gate.LOCAL_EVIDENCE_GATES
+    } == {name for name in names if name.startswith("evidence_")}
+    assert any(name.startswith("model_hub_") for name in names)
+    assert any(name.startswith("lac_pro_") for name in names)
+    assert any(name == "installer_exists" for name in names)
+
+
+def test_cloud_scope_report_keeps_full_lane_set(tmp_path, capsys):
+    gate = _load_gate()
+    model = _repo(tmp_path, "model-hub")
+    pro = _repo(tmp_path, "lac-pro")
+    cloud = _repo(tmp_path, "lac-cloud")
+
+    gate.main([
+        "--repo-root", str(model),
+        "--lac-pro-root", str(pro),
+        "--lac-cloud-root", str(cloud),
+        "--evidence", str(tmp_path / "missing.json"),
+        "--installer", str(tmp_path / "missing-installer.exe"),
+    ])
+
+    report = json.loads(capsys.readouterr().out)
+    assert report["release_scope"] == "cloud"
+    names = [row["name"] for row in report["checks"]]
+    assert any(name.startswith("lac_cloud_") for name in names)
+    assert "cloud_product_local_complete" in names
+    assert {
+        f"evidence_{name}" for name in gate.REQUIRED_EVIDENCE_GATES
+    } == {name for name in names if name.startswith("evidence_")}

@@ -1129,6 +1129,13 @@ def check_installer(
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Fail-closed LAC 2.7 enterprise launch gate.")
     parser.add_argument("--repo-root", type=Path, default=ROOT)
+    parser.add_argument(
+        "--release-scope",
+        choices=RELEASE_SCOPES,
+        default="cloud",
+        help="Which release this run authorizes: the local installer release "
+        "or the full cloud launch.",
+    )
     parser.add_argument("--lac-pro-root", type=Path, default=ROOT.parent / "lac-pro")
     parser.add_argument("--lac-cloud-root", type=Path, default=ROOT.parent / "lac-cloud")
     parser.add_argument(
@@ -1147,12 +1154,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 
 def build_report(args: argparse.Namespace) -> dict[str, Any]:
+    release_scope = args.release_scope
     source = _git(args.repo_root, "rev-parse", "HEAD")
     source_commit = source.stdout.strip() if source.returncode == 0 else ""
     pro_source = _git(args.lac_pro_root, "rev-parse", "HEAD")
     pro_source_commit = pro_source.stdout.strip() if pro_source.returncode == 0 else ""
-    cloud_source = _git(args.lac_cloud_root, "rev-parse", "HEAD")
-    cloud_source_commit = cloud_source.stdout.strip() if cloud_source.returncode == 0 else ""
+    cloud_source_commit = ""
     installer_sha256 = _evidence_subject_sha256(args.installer)
     provenance_sha256 = _evidence_subject_sha256(
         args.provenance, max_bytes=256 * 1024,
@@ -1172,12 +1179,21 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
             require_zero_remotes=True,
             base_commit=LAC_PRO_RELEASE_BASE,
         ),
-        *check_repository(
-            "lac_cloud",
-            args.lac_cloud_root,
-            required_remote="https://github.com/Acend-co/lac-cloud.git",
-        ),
-        check_cloud_product_readiness(args.lac_cloud_root),
+    ]
+    if release_scope == "cloud":
+        cloud_source = _git(args.lac_cloud_root, "rev-parse", "HEAD")
+        cloud_source_commit = (
+            cloud_source.stdout.strip() if cloud_source.returncode == 0 else ""
+        )
+        checks += [
+            *check_repository(
+                "lac_cloud",
+                args.lac_cloud_root,
+                required_remote="https://github.com/Acend-co/lac-cloud.git",
+            ),
+            check_cloud_product_readiness(args.lac_cloud_root),
+        ]
+    checks += [
         *check_installer(
             args.installer,
             args.checksums,
@@ -1190,7 +1206,7 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
         ),
         *check_evidence(
             args.evidence,
-            "cloud",
+            release_scope,
             APP_VERSION,
             expected_model_hub_commit=source_commit,
             expected_lac_pro_commit=pro_source_commit,
@@ -1201,7 +1217,8 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
     ]
     failed = [row for row in checks if not row["ok"]]
     return {
-        "schema_version": 1,
+        "schema_version": 2,
+        "release_scope": release_scope,
         "release_version": APP_VERSION,
         "ready": not failed,
         "failed_count": len(failed),
