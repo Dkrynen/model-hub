@@ -41,16 +41,30 @@ review key:
 }
 ```
 
-Every required gate uses the same record shape. Accepted status values are
+Every required gate uses that base record shape. Both
+`cloud_production_dark_smoke` and `regional_latency_slo` additionally require
+signed `deployment_commit`, `api_version_id`, `agent_version_id`, and
+`runner_version_id` fields, and those exact deployment bindings must match each
+other. The latency record also requires `measured_at`. `deployment_commit` must
+equal the exact `lac-cloud` HEAD checked by the gate; `measured_at` is the
+regional run completion time and is freshness-checked independently from the
+later reviewer approval time, with the same 24-hour limit as the cloud
+performance policy. Accepted status values are
 `approved`, `passed`, and `verified`. Placeholder, pending, unsigned, stale,
 future-dated, untrusted, wrong-version, or malformed records fail closed. Trust
 roots are empty by default and must be onboarded in a reviewed source commit;
 an operator-supplied file cannot add its own signer.
 
+Freshness is evaluated against the executing machine's clock. The authoritative
+publication run must therefore execute in protected CI with retained run
+provenance and a trustworthy runner clock; a local invocation is only a
+preflight and cannot authorize publication by itself.
+
 The required gates are defined in `REQUIRED_EVIDENCE_GATES` inside the script
 and cover patent clearance, GitHub governance, Polar readiness, Cloudflare
 account ownership, Turnstile and WAF validation, staging and production smokes,
-paid beta, penetration and cryptographic review, remediation, incident and
+fresh exact-commit regional latency SLO evidence, paid beta, penetration and
+cryptographic review, remediation, incident and
 recovery drills, artifact roundtrip, and clean-machine signed installation.
 
 ## Repository and artifact checks

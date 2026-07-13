@@ -12,6 +12,13 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / "scripts" / "enterprise_launch_gate.py"
+CLOUD_COMMIT = "c" * 40
+NOW = 1_783_944_000.0
+DEPLOYMENT_VERSIONS = {
+    "api_version_id": "11111111-1111-1111-1111-111111111111",
+    "agent_version_id": "22222222-2222-2222-2222-222222222222",
+    "runner_version_id": "33333333-3333-3333-3333-333333333333",
+}
 
 
 def _load_gate():
@@ -43,7 +50,15 @@ def _repo(tmp_path: Path, name: str) -> Path:
     return repo
 
 
-def _valid_evidence(gate, private_key: Ed25519PrivateKey) -> dict:
+def _valid_evidence(
+    gate,
+    private_key: Ed25519PrivateKey,
+    *,
+    cloud_commit: str = CLOUD_COMMIT,
+    measured_at: str = "2026-07-13T00:00:00Z",
+    deployment_versions: dict[str, str] = DEPLOYMENT_VERSIONS,
+    latency_versions: dict[str, str] | None = None,
+) -> dict:
     document = {
         "schema_version": 1,
         "release_version": "2.7.0",
@@ -51,13 +66,22 @@ def _valid_evidence(gate, private_key: Ed25519PrivateKey) -> dict:
     }
     for index, name in enumerate(gate.REQUIRED_EVIDENCE_GATES, start=1):
         record = {
-                "status": "verified",
-                "approver": "independent-reviewer",
-                "reference": f"review-{index:02d}",
-                "recorded_at": "2026-07-13T00:00:00Z",
-                "record_sha256": f"{index:064x}",
-                "signer_kid": "test-reviewer-2026",
+            "status": "verified",
+            "approver": "independent-reviewer",
+            "reference": f"review-{index:02d}",
+            "recorded_at": "2026-07-13T00:00:00Z",
+            "record_sha256": f"{index:064x}",
+            "signer_kid": "test-reviewer-2026",
         }
+        if name in {"cloud_production_dark_smoke", "regional_latency_slo"}:
+            record["deployment_commit"] = cloud_commit
+            record.update(
+                latency_versions
+                if name == "regional_latency_slo" and latency_versions is not None
+                else deployment_versions
+            )
+        if name == "regional_latency_slo":
+            record["measured_at"] = measured_at
         signature = private_key.sign(gate.evidence_signature_payload(name, "2.7.0", record))
         record["signature"] = base64.urlsafe_b64encode(signature).rstrip(b"=").decode("ascii")
         document["gates"][name] = record
@@ -95,16 +119,87 @@ def test_valid_evidence_requires_scoped_signature_exact_release_and_fresh_record
     evidence = _valid_evidence(gate, private_key)
     path.write_text(json.dumps(evidence), encoding="utf-8")
 
-    rows = gate.check_evidence(path, "2.7.0")
+    rows = gate.check_evidence(path, "2.7.0", expected_cloud_commit=CLOUD_COMMIT, now=NOW)
 
-    assert all(row["ok"] for row in gate.check_evidence(path, "2.7.0"))
-    assert not all(row["ok"] for row in gate.check_evidence(path, "2.7.1"))
+    assert all(row["ok"] for row in gate.check_evidence(
+        path, "2.7.0", expected_cloud_commit=CLOUD_COMMIT, now=NOW,
+    ))
+    assert not all(row["ok"] for row in gate.check_evidence(
+        path, "2.7.1", expected_cloud_commit=CLOUD_COMMIT, now=NOW,
+    ))
     evidence["gates"]["patent_clearance"]["reference"] = "tampered-reference"
     path.write_text(json.dumps(evidence), encoding="utf-8")
     assert next(
-        row for row in gate.check_evidence(path, "2.7.0")
+        row for row in gate.check_evidence(
+            path, "2.7.0", expected_cloud_commit=CLOUD_COMMIT, now=NOW,
+        )
         if row["name"] == "evidence_patent_clearance"
     )["ok"] is False
+
+
+def test_regional_latency_evidence_binds_deployment_commit_and_measurement_time(tmp_path, monkeypatch):
+    gate = _load_gate()
+    path = tmp_path / "evidence.json"
+    private_key = Ed25519PrivateKey.generate()
+    public_key = private_key.public_key().public_bytes(
+        serialization.Encoding.Raw,
+        serialization.PublicFormat.Raw,
+    )
+    monkeypatch.setattr(gate, "TRUSTED_EVIDENCE_SIGNERS", {
+        "test-reviewer-2026": {
+            "public_key": base64.urlsafe_b64encode(public_key).rstrip(b"=").decode("ascii"),
+            "approvers": ["independent-reviewer"],
+            "gates": list(gate.REQUIRED_EVIDENCE_GATES),
+            "not_before": 1_700_000_000,
+            "not_after": 1_900_000_000,
+        },
+    })
+
+    wrong_commit = _valid_evidence(gate, private_key, cloud_commit="d" * 40)
+    path.write_text(json.dumps(wrong_commit), encoding="utf-8")
+    rows = gate.check_evidence(
+        path, "2.7.0", expected_cloud_commit=CLOUD_COMMIT, now=NOW,
+    )
+    assert next(row for row in rows if row["name"] == "evidence_regional_latency_slo")["ok"] is False
+
+    mismatched_runtime = _valid_evidence(
+        gate,
+        private_key,
+        latency_versions={
+            **DEPLOYMENT_VERSIONS,
+            "runner_version_id": "44444444-4444-4444-4444-444444444444",
+        },
+    )
+    path.write_text(json.dumps(mismatched_runtime), encoding="utf-8")
+    rows = gate.check_evidence(
+        path, "2.7.0", expected_cloud_commit=CLOUD_COMMIT, now=NOW,
+    )
+    assert next(row for row in rows if row["name"] == "evidence_cloud_production_dark_smoke")["ok"] is False
+    assert next(row for row in rows if row["name"] == "evidence_regional_latency_slo")["ok"] is False
+
+    placeholder_runtime = _valid_evidence(
+        gate,
+        private_key,
+        deployment_versions={**DEPLOYMENT_VERSIONS, "api_version_id": "replace"},
+        latency_versions={**DEPLOYMENT_VERSIONS, "api_version_id": "replace"},
+    )
+    path.write_text(json.dumps(placeholder_runtime), encoding="utf-8")
+    rows = gate.check_evidence(
+        path, "2.7.0", expected_cloud_commit=CLOUD_COMMIT, now=NOW,
+    )
+    assert next(row for row in rows if row["name"] == "evidence_cloud_production_dark_smoke")["ok"] is False
+    assert next(row for row in rows if row["name"] == "evidence_regional_latency_slo")["ok"] is False
+
+    old_measurement = _valid_evidence(
+        gate,
+        private_key,
+        measured_at="2026-06-01T00:00:00Z",
+    )
+    path.write_text(json.dumps(old_measurement), encoding="utf-8")
+    rows = gate.check_evidence(
+        path, "2.7.0", expected_cloud_commit=CLOUD_COMMIT, now=NOW,
+    )
+    assert next(row for row in rows if row["name"] == "evidence_regional_latency_slo")["ok"] is False
 
 
 def test_repository_checks_report_dirty_unsigned_and_remote_policy(tmp_path):
@@ -188,6 +283,13 @@ def test_release_range_starts_at_the_public_upstream_commit():
         "c84d0fffae638664c6887b5786645cd4055d5c45"  # pragma: allowlist secret -- public Git commit
     )
     assert gate.MODEL_HUB_RELEASE_BASE == expected
+
+
+def test_regional_latency_is_a_fresh_signed_launch_gate():
+    gate = _load_gate()
+
+    assert "regional_latency_slo" in gate.REQUIRED_EVIDENCE_GATES
+    assert gate.EVIDENCE_MAX_AGE_DAYS["regional_latency_slo"] == 1
 
 
 def test_authenticode_trust_requires_rfc3161_timestamp_identity_and_time(monkeypatch):

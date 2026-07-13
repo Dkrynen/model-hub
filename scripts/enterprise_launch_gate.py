@@ -33,6 +33,7 @@ REQUIRED_EVIDENCE_GATES = (
     "waf_abuse_protection",
     "cloud_staging_smoke",
     "cloud_production_dark_smoke",
+    "regional_latency_slo",
     "private_paid_beta",
     "external_pentest",
     "cryptographic_review",
@@ -45,8 +46,25 @@ REQUIRED_EVIDENCE_GATES = (
 )
 _PLACEHOLDER = re.compile(r"(?:\btbd\b|\btodo\b|\bpending\b|replace|example)", re.IGNORECASE)
 _SHA256 = re.compile(r"[A-Fa-f0-9]{64}")
+_GIT_COMMIT = re.compile(r"[a-f0-9]{40}")
+_WORKER_VERSION_ID = re.compile(
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+)
 _B64URL = re.compile(r"[A-Za-z0-9_-]+")
 _SIGNED_STATES = frozenset({"G"})
+_EVIDENCE_RECORD_FIELDS = {
+    "status", "approver", "reference", "recorded_at", "record_sha256",
+    "signer_kid", "signature",
+}
+_DEPLOYMENT_BINDING_FIELDS = {
+    "deployment_commit", "api_version_id", "agent_version_id", "runner_version_id",
+}
+_DEPLOYMENT_EVIDENCE_FIELDS = _EVIDENCE_RECORD_FIELDS | _DEPLOYMENT_BINDING_FIELDS
+_LATENCY_EVIDENCE_FIELDS = _DEPLOYMENT_EVIDENCE_FIELDS | {"measured_at"}
+_DEPLOYMENT_EVIDENCE_GATES = frozenset({
+    "cloud_production_dark_smoke",
+    "regional_latency_slo",
+})
 
 # Immutable disclosure-freeze bases. Only commits after these reviewed objects
 # belong to the 2.7.0 launch range. Changing a local upstream cannot narrow it.
@@ -75,6 +93,7 @@ EVIDENCE_MAX_AGE_DAYS = {
     "waf_abuse_protection": 30,
     "cloud_staging_smoke": 14,
     "cloud_production_dark_smoke": 7,
+    "regional_latency_slo": 1,
     "private_paid_beta": 90,
     "external_pentest": 90,
     "cryptographic_review": 180,
@@ -167,12 +186,15 @@ def _verify_evidence_record(
     release_version: str,
     record: object,
     *,
+    expected_cloud_commit: str,
     now: float,
 ) -> bool:
-    if not isinstance(record, dict) or set(record) != {
-        "status", "approver", "reference", "recorded_at", "record_sha256",
-        "signer_kid", "signature",
-    }:
+    expected_fields = (
+        _LATENCY_EVIDENCE_FIELDS if name == "regional_latency_slo"
+        else _DEPLOYMENT_EVIDENCE_FIELDS if name == "cloud_production_dark_smoke"
+        else _EVIDENCE_RECORD_FIELDS
+    )
+    if not isinstance(record, dict) or set(record) != expected_fields:
         return False
     recorded_at = _recorded_at(record.get("recorded_at"))
     max_age = EVIDENCE_MAX_AGE_DAYS[name] * 86_400
@@ -187,6 +209,26 @@ def _verify_evidence_record(
         or now - recorded_at > max_age
     ):
         return False
+    if name in _DEPLOYMENT_EVIDENCE_GATES:
+        if (
+            _GIT_COMMIT.fullmatch(expected_cloud_commit) is None
+            or record.get("deployment_commit") != expected_cloud_commit
+            or any(
+                not isinstance(record.get(field), str)
+                or _WORKER_VERSION_ID.fullmatch(record[field]) is None
+                for field in ("api_version_id", "agent_version_id", "runner_version_id")
+            )
+        ):
+            return False
+    if name == "regional_latency_slo":
+        measured_at = _recorded_at(record.get("measured_at"))
+        if (
+            measured_at is None
+            or measured_at > now + 300
+            or measured_at > recorded_at + 300
+            or now - measured_at > max_age
+        ):
+            return False
     kid = record.get("signer_kid")
     signer = TRUSTED_EVIDENCE_SIGNERS.get(kid) if isinstance(kid, str) else None
     if not isinstance(signer, dict) or set(signer) != {
@@ -215,7 +257,13 @@ def _verify_evidence_record(
     return True
 
 
-def check_evidence(path: Path, expected_version: str, *, now: float | None = None) -> list[dict[str, Any]]:
+def check_evidence(
+    path: Path,
+    expected_version: str,
+    *,
+    expected_cloud_commit: str = "",
+    now: float | None = None,
+) -> list[dict[str, Any]]:
     missing = [
         _result(
             f"evidence_{name}",
@@ -243,16 +291,29 @@ def check_evidence(path: Path, expected_version: str, *, now: float | None = Non
     gates = document.get("gates")
     if not isinstance(gates, dict):
         gates = {}
-    rows: list[dict[str, Any]] = []
     current = time.time() if now is None else now
+    verified: dict[str, bool] = {}
     for name in REQUIRED_EVIDENCE_GATES:
         record = gates.get(name)
-        record_ok = version_ok and _verify_evidence_record(
+        verified[name] = version_ok and _verify_evidence_record(
             name,
             expected_version,
             record,
+            expected_cloud_commit=expected_cloud_commit,
             now=current,
         )
+    deployment_records = [gates.get(name) for name in _DEPLOYMENT_EVIDENCE_GATES]
+    if all(verified.get(name) for name in _DEPLOYMENT_EVIDENCE_GATES):
+        bindings_match = all(
+            deployment_records[0].get(field) == deployment_records[1].get(field)
+            for field in _DEPLOYMENT_BINDING_FIELDS
+        )
+        if not bindings_match:
+            for name in _DEPLOYMENT_EVIDENCE_GATES:
+                verified[name] = False
+    rows: list[dict[str, Any]] = []
+    for name in REQUIRED_EVIDENCE_GATES:
+        record_ok = verified[name]
         rows.append(_result(
             f"evidence_{name}",
             record_ok,
@@ -627,6 +688,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 def build_report(args: argparse.Namespace) -> dict[str, Any]:
     source = _git(args.repo_root, "rev-parse", "HEAD")
     source_commit = source.stdout.strip() if source.returncode == 0 else ""
+    cloud_source = _git(args.lac_cloud_root, "rev-parse", "HEAD")
+    cloud_source_commit = cloud_source.stdout.strip() if cloud_source.returncode == 0 else ""
     checks = [
         *check_repository(
             "model_hub",
@@ -652,7 +715,11 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
             args.provenance,
             source_commit,
         ),
-        *check_evidence(args.evidence, APP_VERSION),
+        *check_evidence(
+            args.evidence,
+            APP_VERSION,
+            expected_cloud_commit=cloud_source_commit,
+        ),
     ]
     failed = [row for row in checks if not row["ok"]]
     return {
