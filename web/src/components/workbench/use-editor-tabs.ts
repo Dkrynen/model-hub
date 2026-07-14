@@ -11,6 +11,7 @@ import {
   type TabsState,
   activateTab,
   beginSave,
+  changeIdOfTabId,
   closeTab,
   emptyTabs,
   filePathOfTabId,
@@ -21,7 +22,9 @@ import {
   saveFailed,
   saveSucceeded,
   saveTargetMissing,
+  tabId,
 } from "@/lib/workbench-tabs";
+import type { StagedChangeSummary } from "@/lib/types";
 
 export interface FileBuffer {
   phase: "loading" | "ready" | "error";
@@ -31,6 +34,19 @@ export interface FileBuffer {
   error: { status: number | null; message: string } | null;
   save: SaveState;
   conflict: { diskContent: string; diskSha256: string | null } | null;
+}
+
+export interface DiffTabState {
+  phase: "loading" | "ready" | "error";
+  detail: import("@/lib/types").StagedChangeDetail | null;
+  stale: boolean;
+  error: { status: number | null; message: string } | null;
+}
+
+function diffErrorMessage(status: number | null): string {
+  if (status === 404) return "This staged change is no longer available.";
+  if (status === 409) return "The project registration changed; re-pick the project.";
+  return "This staged change could not be loaded.";
 }
 
 const freshBuffer = (): FileBuffer => ({
@@ -85,6 +101,9 @@ export function useEditorTabs(projectId: string) {
   const [tabs, setTabs] = useState<TabsState>(emptyTabs);
   const [buffers, setBuffers] = useState<Map<string, FileBuffer>>(new Map());
   const [dirty, setDirty] = useState<Set<string>>(new Set());
+  const [diffTabs, setDiffTabs] = useState<Map<string, DiffTabState>>(new Map());
+  const diffTabsRef = useRef(diffTabs);
+  diffTabsRef.current = diffTabs;
   const buffersRef = useRef(buffers);
   buffersRef.current = buffers;
   const dirtyRef = useRef(dirty);
@@ -102,11 +121,22 @@ export function useEditorTabs(projectId: string) {
     });
   }, []);
 
+  const patchDiff = useCallback((changeId: string, patch: Partial<DiffTabState>) => {
+    setDiffTabs((current) => {
+      const existing = current.get(changeId);
+      if (!existing) return current;
+      const next = new Map(current);
+      next.set(changeId, { ...existing, ...patch });
+      return next;
+    });
+  }, []);
+
   const reset = useCallback(() => {
     sequenceRef.current += 1;
     setTabs(emptyTabs);
     setBuffers(new Map());
     setDirty(new Set());
+    setDiffTabs(new Map());
   }, []);
 
   useEffect(() => {
@@ -205,6 +235,15 @@ export function useEditorTabs(projectId: string) {
         if (!current.has(path)) return current;
         const next = new Set(current);
         next.delete(path);
+        return next;
+      });
+    }
+    const changeId = changeIdOfTabId(id);
+    if (changeId) {
+      setDiffTabs((current) => {
+        if (!current.has(changeId)) return current;
+        const next = new Map(current);
+        next.delete(changeId);
         return next;
       });
     }
@@ -310,10 +349,101 @@ export function useEditorTabs(projectId: string) {
     [patchBuffer]
   );
 
+  const loadDiff = useCallback(
+    async (changeId: string) => {
+      const sequence = sequenceRef.current;
+      const pid = projectIdRef.current;
+      try {
+        const detail = await api.stagedChange(changeId);
+        if (!isCurrent(sequence, pid)) return;
+        setDiffTabs((current) => {
+          if (!current.has(changeId)) return current;
+          const next = new Map(current);
+          next.set(changeId, { phase: "ready", detail, stale: false, error: null });
+          return next;
+        });
+      } catch (error) {
+        if (!isCurrent(sequence, pid)) return;
+        const status = error instanceof ApiError ? error.status : null;
+        patchDiff(changeId, {
+          phase: "error",
+          error: { status, message: diffErrorMessage(status) },
+        });
+      }
+    },
+    [isCurrent, patchDiff]
+  );
+
+  const openDiff = useCallback(
+    (change: StagedChangeSummary) => {
+      setTabs((current) => openTab(current, { kind: "diff", key: change.id }));
+      if (diffTabsRef.current.has(change.id)) return;
+      setDiffTabs((current) =>
+        new Map(current).set(change.id, {
+          phase: "loading",
+          detail: null,
+          stale: false,
+          error: null,
+        })
+      );
+      void loadDiff(change.id);
+    },
+    [loadDiff]
+  );
+
+  const refreshDiff = useCallback(
+    (changeId: string) => {
+      if (!diffTabsRef.current.has(changeId)) return;
+      patchDiff(changeId, { stale: false });
+      void loadDiff(changeId);
+    },
+    [loadDiff, patchDiff]
+  );
+
+  const markDiffStaleForPath = useCallback((path: string) => {
+    setDiffTabs((current) => {
+      let changed = false;
+      const next = new Map(current);
+      for (const [id, state] of current) {
+        if (state.detail?.path === path && !state.stale) {
+          next.set(id, { ...state, stale: true });
+          changed = true;
+        }
+      }
+      return changed ? next : current;
+    });
+  }, []);
+
+  const closeDiffs = useCallback(() => {
+    setTabs((current) => {
+      const remaining = current.tabs.filter((tab) => tab.kind !== "diff");
+      if (remaining.length === current.tabs.length) return current;
+      const active =
+        current.active && remaining.some((tab) => tabId(tab) === current.active)
+          ? current.active
+          : remaining.length
+            ? tabId(remaining[remaining.length - 1])
+            : null;
+      return { tabs: remaining, active };
+    });
+    setDiffTabs(new Map());
+  }, []);
+
+  const syncDiskForPath = useCallback(
+    (path: string) => {
+      const buffer = buffersRef.current.get(path);
+      if (!buffer || buffer.phase !== "ready") return;
+      if (dirtyRef.current.has(path) || buffer.save.phase === "saving") return;
+      void loadBuffer(path);
+    },
+    [loadBuffer]
+  );
+
   return {
     tabs,
     buffers,
     dirty,
+    diffTabs,
     hasDirty: dirty.size > 0,
     openFile,
     activate,
@@ -322,6 +452,11 @@ export function useEditorTabs(projectId: string) {
     save: (path: string) => void save(path),
     saveAgain,
     keepEditing,
+    openDiff,
+    refreshDiff,
+    markDiffStaleForPath,
+    closeDiffs,
+    syncDiskForPath,
     reset,
   };
 }

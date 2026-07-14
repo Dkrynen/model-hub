@@ -4,15 +4,16 @@ import type { ReactNode } from "react";
 import { X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { type TabsState, filePathOfTabId, tabId } from "@/lib/workbench-tabs";
+import { type TabsState, changeIdOfTabId, filePathOfTabId, findTab, tabId } from "@/lib/workbench-tabs";
 import { CodeEditor } from "./code-editor";
-import { SaveConflictView } from "./diff-view";
-import type { FileBuffer } from "./use-editor-tabs";
+import { SaveConflictView, StagedDiffView } from "./diff-view";
+import type { DiffTabState, FileBuffer } from "./use-editor-tabs";
 
 interface EditorPaneProps {
   tabs: TabsState;
   buffers: ReadonlyMap<string, FileBuffer>;
   dirty: ReadonlySet<string>;
+  diffTabs: ReadonlyMap<string, DiffTabState>;
   emptyState: ReactNode;
   onActivate: (id: string) => void;
   onClose: (id: string) => void;
@@ -20,12 +21,17 @@ interface EditorPaneProps {
   onSave: (path: string) => void;
   onSaveAgain: (path: string, content: string) => void;
   onKeepEditing: (path: string, content: string) => void;
+  onDiffApply: (changeId: string) => void;
+  onDiffReject: (changeId: string) => void;
+  onDiffRevert: (changeId: string) => void;
+  onRefreshDiff: (changeId: string) => void;
 }
 
 export default function EditorPane({
   tabs,
   buffers,
   dirty,
+  diffTabs,
   emptyState,
   onActivate,
   onClose,
@@ -33,9 +39,16 @@ export default function EditorPane({
   onSave,
   onSaveAgain,
   onKeepEditing,
+  onDiffApply,
+  onDiffReject,
+  onDiffRevert,
+  onRefreshDiff,
 }: EditorPaneProps) {
-  const activePath = tabs.active ? filePathOfTabId(tabs.active) : null;
+  const activeTab = tabs.active ? findTab(tabs, tabs.active) : undefined;
+  const activePath = activeTab?.kind === "file" ? activeTab.key : null;
+  const activeChangeId = activeTab?.kind === "diff" ? activeTab.key : null;
   const buffer = activePath ? buffers.get(activePath) : undefined;
+  const diff = activeChangeId ? diffTabs.get(activeChangeId) : undefined;
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -48,7 +61,10 @@ export default function EditorPane({
           {tabs.tabs.map((tab) => {
             const id = tabId(tab);
             const active = tabs.active === id;
-            const label = tab.key.slice(tab.key.lastIndexOf("/") + 1);
+            const label =
+              tab.kind === "diff"
+                ? (diffTabs.get(tab.key)?.detail?.path.split("/").pop() ?? "diff")
+                : tab.key.slice(tab.key.lastIndexOf("/") + 1);
             const isDirty = tab.kind === "file" && dirty.has(tab.key);
             return (
               <div
@@ -92,7 +108,30 @@ export default function EditorPane({
       )}
 
       <div className="min-h-0 flex-1">
-        {!activePath || !buffer ? (
+        {activeChangeId && diff ? (
+          diff.phase === "loading" ? (
+            <div role="status" aria-live="polite" className="p-4 text-[12.5px] text-fg-muted">
+              Loading change…
+            </div>
+          ) : diff.phase === "error" || !diff.detail ? (
+            <div role="alert" className="m-4 rounded border border-warning/30 bg-warning-soft p-3 text-[12.5px] text-warning">
+              {diff.error?.message ?? "This staged change could not be loaded."}
+            </div>
+          ) : (
+            <StagedDiffView
+              path={diff.detail.path}
+              oldContent={diff.detail.old_content}
+              newContent={diff.detail.new_content}
+              status={diff.detail.status}
+              stale={diff.stale}
+              busy={false}
+              onApply={() => onDiffApply(activeChangeId)}
+              onReject={() => onDiffReject(activeChangeId)}
+              onRevert={() => onDiffRevert(activeChangeId)}
+              onRefresh={() => onRefreshDiff(activeChangeId)}
+            />
+          )
+        ) : !activePath || !buffer ? (
           <div className="flex h-full items-center justify-center p-4">{emptyState}</div>
         ) : buffer.phase === "loading" ? (
           <div role="status" aria-live="polite" className="p-4 text-[12.5px] text-fg-muted">
