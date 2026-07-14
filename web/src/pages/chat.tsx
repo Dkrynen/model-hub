@@ -336,6 +336,7 @@ export function Chat() {
     changeBusyRef.current = "";
     setChangeBusy("");
     setStagedChanges([]);
+    editor.closeDiffs();
   };
 
   const beginSessionContext = (sessionId: string) => {
@@ -847,6 +848,7 @@ export function Chat() {
         ) {
           appendRunEvent(eventFromRaw(ev), generation);
           void refreshStagedChanges(streamSessionId, true);
+          if (typeof ev.path === "string") editor.markDiffStaleForPath(ev.path);
         } else if (type === "status") {
           if (agent !== "ask") {
             const event = eventFromRaw(ev);
@@ -1023,6 +1025,7 @@ export function Chat() {
         description: `${fullPath}\nRun: ${change.run_id}`,
       });
       await refreshStagedChanges(change.session_id);
+      editor.syncDiskForPath(change.path);
     } catch (error) {
       if (isActiveSessionAction(identity)) {
         const failure = error instanceof ApiError
@@ -1103,6 +1106,7 @@ export function Chat() {
         description: `${fullPath}\nRun: ${change.run_id}`,
       });
       await refreshStagedChanges(change.session_id);
+      editor.syncDiskForPath(change.path);
     } catch (error) {
       if (isActiveSessionAction(identity)) {
         const failure = error instanceof ApiError
@@ -1145,6 +1149,9 @@ export function Chat() {
         "Apply all finished", { description: parts.join(" · ") }
       );
       await refreshStagedChanges(sid);
+      for (const c of stagedChanges) {
+        if (c.status === "pending") editor.syncDiskForPath(c.path);
+      }
     } catch (error) {
       if (isActiveSessionAction(identity)) {
         const failure = error instanceof ApiError
