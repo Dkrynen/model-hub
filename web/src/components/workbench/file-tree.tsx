@@ -99,13 +99,13 @@ export function FileTree({ projectId, pendingPaths, onOpenFile }: FileTreeProps)
   }, [loadDir, projectId]);
 
   const toggleDir = (path: string) => {
+    if (!expanded.has(path) && !dirs.get(path)) void loadDir(path);
     setExpanded((current) => {
       const next = new Set(current);
       if (next.has(path)) {
         next.delete(path);
       } else {
         next.add(path);
-        if (!dirs.get(path)) void loadDir(path);
       }
       return next;
     });
