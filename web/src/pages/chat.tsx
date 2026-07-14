@@ -1126,6 +1126,13 @@ export function Chat() {
         description: `${fullPath}\nRun: ${change.run_id}`,
       });
       await refreshStagedChanges(change.session_id);
+      if (!isActiveSessionAction(identity)) return;
+      const detail = await api.stagedChange(change.id);
+      if (
+        isActiveSessionAction(identity) &&
+        detail.session_id === change.session_id &&
+        detail.run_id === change.run_id
+      ) setSelectedChange(detail);
     } catch (error) {
       if (isActiveSessionAction(identity)) {
         const failure = error instanceof ApiError
@@ -1168,6 +1175,20 @@ export function Chat() {
         "Apply all finished", { description: parts.join(" · ") }
       );
       await refreshStagedChanges(sid);
+      if (!isActiveSessionAction(identity)) return;
+      const selectedId = selectedChange?.id;
+      if (selectedId) {
+        try {
+          const detail = await api.stagedChange(selectedId);
+          if (isActiveSessionAction(identity) && detail.session_id === sid) {
+            setSelectedChange((current) =>
+              current && current.id === detail.id ? detail : current
+            );
+          }
+        } catch {
+          // Keep the selection exactly as refreshStagedChanges left it.
+        }
+      }
     } catch (error) {
       if (isActiveSessionAction(identity)) {
         const failure = error instanceof ApiError
