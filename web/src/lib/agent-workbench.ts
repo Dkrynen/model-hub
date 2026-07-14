@@ -188,7 +188,7 @@ function responseField(body: unknown, field: string): string {
 }
 
 export function stagedActionFailure(
-  action: "apply" | "reject",
+  action: "apply" | "reject" | "revert" | "apply-all",
   status: number,
   body: unknown
 ): StagedActionFailure | null {
@@ -211,6 +211,19 @@ export function stagedActionFailure(
   }
 
   const error = responseField(body, "error");
+  if (action === "revert") {
+    return {
+      title: "Could not revert staged change",
+      description: error || "The server rejected this action because the staged change state changed.",
+    };
+  }
+  if (action === "apply-all") {
+    return {
+      title: "Could not apply all staged changes",
+      description: error || "The server rejected this action because the staged change state changed.",
+    };
+  }
+
   return {
     title: `Could not ${action} staged change`,
     description: error || "The server rejected this action because the staged change state changed.",

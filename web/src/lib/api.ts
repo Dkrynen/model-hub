@@ -449,6 +449,21 @@ export const api = {
       `/api/agent/changes/${encodeURIComponent(changeId)}/reject`,
       {}
     ),
+  revertStagedChange: (changeId: string) =>
+    postJSON<import("./types").StagedChangeActionResponse>(
+      `/api/agent/changes/${encodeURIComponent(changeId)}/revert`,
+      {}
+    ),
+  applyAllStagedChanges: (sessionId: string, ids?: string[]) =>
+    postJSON<import("./types").StagedBatchApplyResponse>(
+      `/api/agent/sessions/${encodeURIComponent(sessionId)}/changes/apply`,
+      ids ? { ids } : {}
+    ),
+  saveProjectFile: (projectId: string, body: import("./types").ProjectFileSaveRequest) =>
+    postJSON<import("./types").ProjectFileSaveResponse>(
+      `/api/projects/${encodeURIComponent(projectId)}/file/save`,
+      body
+    ),
   /** Poll LAC Pro's autopilot status for a just-installed model. */
   proOptimizeStatus: (model: string) =>
     getJSON<{ state: "idle" | "running" | "done" | "failed_silent" | "not_licensed"; tokens_per_second?: number }>(

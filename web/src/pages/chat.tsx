@@ -1104,6 +1104,88 @@ export function Chat() {
     }
   };
 
+  const revertChange = async (change: StagedChangeSummary) => {
+    const identity = {
+      sessionId: change.session_id,
+      generation: sessionGenerationRef.current,
+    };
+    if (!isActiveSessionAction(identity)) return;
+    const fullPath = stagedFullPath(change.root, change.path);
+    if (!window.confirm(
+      `Revert this applied change?\n\nPath: ${fullPath}\nRun: ${change.run_id}\n\nDisk is restored to the snapshot taken at staging.`
+    )) return;
+    if (!isActiveSessionAction(identity)) return;
+    const busyKey = `${identity.generation}:revert:${change.id}`;
+    if (changeBusyRef.current) return;
+    changeBusyRef.current = busyKey;
+    try {
+      setChangeBusy(busyKey);
+      await api.revertStagedChange(change.id);
+      if (!isActiveSessionAction(identity)) return;
+      toast.success("Applied change reverted", {
+        description: `${fullPath}\nRun: ${change.run_id}`,
+      });
+      await refreshStagedChanges(change.session_id);
+    } catch (error) {
+      if (isActiveSessionAction(identity)) {
+        const failure = error instanceof ApiError
+          ? stagedActionFailure("revert", error.status, error.body)
+          : null;
+        toast.error(failure?.title ?? "Could not revert staged change", {
+          description: failure?.description ?? (error instanceof Error ? error.message : String(error)),
+        });
+        await refreshStagedChanges(change.session_id, true);
+      }
+    } finally {
+      if (changeBusyRef.current === busyKey) {
+        changeBusyRef.current = "";
+        if (mountedRef.current) setChangeBusy("");
+      }
+    }
+  };
+
+  const applyAllChanges = async () => {
+    const sid = activeSessionRef.current;
+    if (!sid) return;
+    const identity = { sessionId: sid, generation: sessionGenerationRef.current };
+    if (!isActiveSessionAction(identity)) return;
+    const pendingCount = stagedChanges.filter((c) => c.status === "pending").length;
+    if (!window.confirm(
+      `Apply all ${pendingCount} pending staged changes to disk?\n\nConflicting changes are skipped and marked.`
+    )) return;
+    if (!isActiveSessionAction(identity)) return;
+    const busyKey = `${identity.generation}:apply-all:${sid}`;
+    if (changeBusyRef.current) return;
+    changeBusyRef.current = busyKey;
+    try {
+      setChangeBusy(busyKey);
+      const result = await api.applyAllStagedChanges(sid);
+      if (!isActiveSessionAction(identity)) return;
+      const parts = [`${result.applied.length} applied`];
+      if (result.conflicts.length) parts.push(`${result.conflicts.length} conflicts`);
+      if (result.errors.length) parts.push(`${result.errors.length} errors`);
+      (result.conflicts.length || result.errors.length ? toast.warning : toast.success)(
+        "Apply all finished", { description: parts.join(" · ") }
+      );
+      await refreshStagedChanges(sid);
+    } catch (error) {
+      if (isActiveSessionAction(identity)) {
+        const failure = error instanceof ApiError
+          ? stagedActionFailure("apply-all", error.status, error.body)
+          : null;
+        toast.error(failure?.title ?? "Could not apply staged changes", {
+          description: failure?.description ?? (error instanceof Error ? error.message : String(error)),
+        });
+        await refreshStagedChanges(sid, true);
+      }
+    } finally {
+      if (changeBusyRef.current === busyKey) {
+        changeBusyRef.current = "";
+        if (mountedRef.current) setChangeBusy("");
+      }
+    }
+  };
+
   const stop = () => {
     const sessionId = activeSessionRef.current;
     cancelActiveRun();
@@ -1402,6 +1484,8 @@ export function Chat() {
                 onReview={(change) => void reviewStagedChange(change)}
                 onApply={(change) => void applyChange(change)}
                 onReject={(change) => void rejectChange(change)}
+                onRevert={(change) => void revertChange(change)}
+                onApplyAll={() => void applyAllChanges()}
               />
             </div>
           )}
@@ -1689,6 +1773,8 @@ function StagedChangesPanel({
   onReview,
   onApply,
   onReject,
+  onRevert,
+  onApplyAll,
 }: {
   changes: StagedChangeSummary[];
   selected: StagedChangeDetail | null;
@@ -1696,6 +1782,8 @@ function StagedChangesPanel({
   onReview: (change: StagedChangeSummary) => void;
   onApply: (change: StagedChangeSummary) => void;
   onReject: (change: StagedChangeSummary) => void;
+  onRevert: (change: StagedChangeSummary) => void;
+  onApplyAll: () => void;
 }) {
   const pending = changes.filter((change) => change.status === "pending").length;
   return (
@@ -1705,6 +1793,11 @@ function StagedChangesPanel({
           Staged changes
         </div>
         <Badge variant={pending ? "warning" : "neutral"}>{pending} pending</Badge>
+        {pending > 1 && (
+          <Button size="sm" variant="ghost" onClick={onApplyAll}>
+            Apply all
+          </Button>
+        )}
       </div>
       <div className="space-y-2">
         {changes.slice().reverse().map((change) => {
@@ -1731,6 +1824,11 @@ function StagedChangesPanel({
                       Reject
                     </Button>
                   </>
+                )}
+                {change.status === "applied" && (
+                  <Button size="sm" variant="ghost" disabled={isBusy} onClick={() => onRevert(change)}>
+                    Revert
+                  </Button>
                 )}
               </div>
             </div>

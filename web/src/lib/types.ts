@@ -487,6 +487,32 @@ export interface StagedChangeActionResponse {
   base_hash?: string | null;
 }
 
+export interface StagedBatchApplyResponse {
+  applied: string[];
+  conflicts: string[];
+  errors: { id: string; error: string }[];
+}
+
+export interface ProjectFileSaveRequest {
+  path: string;
+  content: string;
+  base_sha256: string | null;
+}
+
+export interface ProjectFileSaveResponse {
+  status: "applied";
+  change_id: string;
+  path: string;
+  sha256: string;
+  size: number;
+}
+
+export interface ProjectFileSaveConflict {
+  error: "conflict";
+  code: "save_conflict";
+  disk_sha256: string | null;
+}
+
 export interface VersionInfo {
   version: string;
   github_url: string;
