@@ -17,6 +17,7 @@ import { toast } from "sonner";
 import { PageHeader } from "@/components/page";
 import { ContextPicker } from "@/components/workbench/context-picker";
 import { FileTree } from "@/components/workbench/file-tree";
+import { StagedQueue } from "@/components/workbench/staged-queue";
 import { useEditorTabs } from "@/components/workbench/use-editor-tabs";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -51,7 +52,6 @@ import {
   shouldCommitSandboxStatus,
 } from "@/lib/agent-command";
 import {
-  STAGED_SNAPSHOT_LABEL,
   approvalLockKey,
   approvalDecisionIntent,
   agentModeNeedsProject,
@@ -82,7 +82,6 @@ import type {
   SessionDetail,
   SessionEvent,
   SessionSummary,
-  StagedChangeDetail,
   StagedChangeSummary,
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -246,7 +245,6 @@ export function Chat() {
   });
   const [approval, setApproval] = useState(initialApprovalState);
   const [stagedChanges, setStagedChanges] = useState<StagedChangeSummary[]>([]);
-  const [selectedChange, setSelectedChange] = useState<StagedChangeDetail | null>(null);
   const pendingStagedPaths = useMemo(
     () =>
       new Set(
@@ -338,7 +336,6 @@ export function Chat() {
     changeBusyRef.current = "";
     setChangeBusy("");
     setStagedChanges([]);
-    setSelectedChange(null);
   };
 
   const beginSessionContext = (sessionId: string) => {
@@ -369,7 +366,6 @@ export function Chat() {
     };
     if (!sessionId) {
       setStagedChanges([]);
-      setSelectedChange(null);
       return;
     }
     try {
@@ -383,9 +379,6 @@ export function Chat() {
         )
       ) return;
       setStagedChanges(response.changes);
-      setSelectedChange((current) =>
-        current && response.changes.some((change) => change.id === current.id) ? current : null
-      );
     } catch (error) {
       if (
         !quiet &&
@@ -1001,35 +994,11 @@ export function Chat() {
     }
   };
 
-  const reviewStagedChange = async (change: StagedChangeSummary) => {
-    const identity = {
-      sessionId: change.session_id,
-      generation: sessionGenerationRef.current,
-    };
+  const reviewStagedChange = (change: StagedChangeSummary) => {
+    const identity = { sessionId: change.session_id, generation: sessionGenerationRef.current };
     if (!isActiveSessionAction(identity)) return;
-    const busyKey = `${identity.generation}:review:${change.id}`;
-    if (changeBusyRef.current) return;
-    changeBusyRef.current = busyKey;
-    try {
-      setChangeBusy(busyKey);
-      const detail = await api.stagedChange(change.id);
-      if (
-        isActiveSessionAction(identity) &&
-        detail.session_id === change.session_id &&
-        detail.run_id === change.run_id
-      ) setSelectedChange(detail);
-    } catch (error) {
-      if (isActiveSessionAction(identity)) {
-        toast.error("Could not review staged change", {
-          description: error instanceof Error ? error.message : String(error),
-        });
-      }
-    } finally {
-      if (changeBusyRef.current === busyKey) {
-        changeBusyRef.current = "";
-        if (mountedRef.current) setChangeBusy("");
-      }
-    }
+    editor.openDiff(change);
+    setMobilePane("editor");
   };
 
   const applyChange = async (change: StagedChangeSummary) => {
@@ -1054,13 +1023,6 @@ export function Chat() {
         description: `${fullPath}\nRun: ${change.run_id}`,
       });
       await refreshStagedChanges(change.session_id);
-      if (!isActiveSessionAction(identity)) return;
-      const detail = await api.stagedChange(change.id);
-      if (
-        isActiveSessionAction(identity) &&
-        detail.session_id === change.session_id &&
-        detail.run_id === change.run_id
-      ) setSelectedChange(detail);
     } catch (error) {
       if (isActiveSessionAction(identity)) {
         const failure = error instanceof ApiError
@@ -1101,13 +1063,6 @@ export function Chat() {
         description: `${fullPath}\nRun: ${change.run_id}`,
       });
       await refreshStagedChanges(change.session_id);
-      if (!isActiveSessionAction(identity)) return;
-      const detail = await api.stagedChange(change.id);
-      if (
-        isActiveSessionAction(identity) &&
-        detail.session_id === change.session_id &&
-        detail.run_id === change.run_id
-      ) setSelectedChange(detail);
     } catch (error) {
       if (isActiveSessionAction(identity)) {
         const failure = error instanceof ApiError
@@ -1148,13 +1103,6 @@ export function Chat() {
         description: `${fullPath}\nRun: ${change.run_id}`,
       });
       await refreshStagedChanges(change.session_id);
-      if (!isActiveSessionAction(identity)) return;
-      const detail = await api.stagedChange(change.id);
-      if (
-        isActiveSessionAction(identity) &&
-        detail.session_id === change.session_id &&
-        detail.run_id === change.run_id
-      ) setSelectedChange(detail);
     } catch (error) {
       if (isActiveSessionAction(identity)) {
         const failure = error instanceof ApiError
@@ -1197,20 +1145,6 @@ export function Chat() {
         "Apply all finished", { description: parts.join(" · ") }
       );
       await refreshStagedChanges(sid);
-      if (!isActiveSessionAction(identity)) return;
-      const selectedId = selectedChange?.id;
-      if (selectedId) {
-        try {
-          const detail = await api.stagedChange(selectedId);
-          if (isActiveSessionAction(identity) && detail.session_id === sid) {
-            setSelectedChange((current) =>
-              current && current.id === detail.id ? detail : current
-            );
-          }
-        } catch {
-          // Keep the selection exactly as refreshStagedChanges left it.
-        }
-      }
     } catch (error) {
       if (isActiveSessionAction(identity)) {
         const failure = error instanceof ApiError
@@ -1227,6 +1161,26 @@ export function Chat() {
         if (mountedRef.current) setChangeBusy("");
       }
     }
+  };
+
+  const changeById = (changeId: string) => stagedChanges.find((c) => c.id === changeId);
+  const onDiffApply = async (changeId: string) => {
+    const change = changeById(changeId);
+    if (!change) return;
+    await applyChange(change);
+    editor.refreshDiff(changeId);
+  };
+  const onDiffReject = async (changeId: string) => {
+    const change = changeById(changeId);
+    if (!change) return;
+    await rejectChange(change);
+    editor.refreshDiff(changeId);
+  };
+  const onDiffRevert = async (changeId: string) => {
+    const change = changeById(changeId);
+    if (!change) return;
+    await revertChange(change);
+    editor.refreshDiff(changeId);
   };
 
   const stop = () => {
@@ -1401,7 +1355,7 @@ export function Chat() {
             </div>
           )}
 
-          {(stagedChanges.length > 0 || selectedChange) && (
+          {stagedChanges.length > 0 && (
             <div className="flex max-h-[45%] flex-col border-t border-line">
               <button
                 type="button"
@@ -1418,11 +1372,10 @@ export function Chat() {
               </button>
               {stagedOpen && (
                 <div className="min-h-0 overflow-y-auto px-3 pb-3">
-                  <StagedChangesPanel
+                  <StagedQueue
                     changes={stagedChanges}
-                    selected={selectedChange}
                     busy={changeBusy}
-                    onReview={(change) => void reviewStagedChange(change)}
+                    onReview={(change) => reviewStagedChange(change)}
                     onApply={(change) => void applyChange(change)}
                     onReject={(change) => void rejectChange(change)}
                     onRevert={(change) => void revertChange(change)}
@@ -1470,6 +1423,11 @@ export function Chat() {
               onSave={editor.save}
               onSaveAgain={editor.saveAgain}
               onKeepEditing={editor.keepEditing}
+              diffTabs={editor.diffTabs}
+              onDiffApply={(id) => void onDiffApply(id)}
+              onDiffReject={(id) => void onDiffReject(id)}
+              onDiffRevert={(id) => void onDiffRevert(id)}
+              onRefreshDiff={(id) => editor.refreshDiff(id)}
             />
           </Suspense>
         </section>
@@ -1884,98 +1842,6 @@ function RunTaskApprovalDetails({
   );
 }
 
-function StagedChangesPanel({
-  changes,
-  selected,
-  busy,
-  onReview,
-  onApply,
-  onReject,
-  onRevert,
-  onApplyAll,
-}: {
-  changes: StagedChangeSummary[];
-  selected: StagedChangeDetail | null;
-  busy: string;
-  onReview: (change: StagedChangeSummary) => void;
-  onApply: (change: StagedChangeSummary) => void;
-  onReject: (change: StagedChangeSummary) => void;
-  onRevert: (change: StagedChangeSummary) => void;
-  onApplyAll: () => void;
-}) {
-  const pending = changes.filter((change) => change.status === "pending").length;
-  return (
-    <div>
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <div className="text-[12px] font-semibold uppercase tracking-[0.08em] text-fg-faint">
-          Staged changes
-        </div>
-        <Badge variant={pending ? "warning" : "neutral"}>{pending} pending</Badge>
-        {pending > 1 && (
-          <Button size="sm" variant="ghost" onClick={onApplyAll}>
-            Apply all
-          </Button>
-        )}
-      </div>
-      <div className="space-y-2">
-        {changes.slice().reverse().map((change) => {
-          const isBusy = Boolean(busy);
-          const fullPath = stagedFullPath(change.root, change.path);
-          return (
-            <div key={change.id} className="rounded border border-line bg-panel-2 p-2.5">
-              <div className="flex items-start justify-between gap-2">
-                <div className="min-w-0 break-all text-[12px] font-medium text-fg">{fullPath}</div>
-                <Badge variant={stagedStatusVariant(change.status)}>{change.status}</Badge>
-              </div>
-              <div className="mt-1 break-all text-[11px] text-fg-faint">Run: {change.run_id}</div>
-              <div className="mt-0.5 text-[11px] text-fg-faint">{formatBytes(change.new_size)} proposed</div>
-              <div className="mt-2 flex flex-wrap gap-1.5">
-                <Button size="sm" variant="ghost" disabled={isBusy} onClick={() => onReview(change)}>
-                  Review
-                </Button>
-                {change.status === "pending" && (
-                  <>
-                    <Button size="sm" disabled={isBusy} onClick={() => onApply(change)}>
-                      Apply to disk
-                    </Button>
-                    <Button size="sm" variant="danger" disabled={isBusy} onClick={() => onReject(change)}>
-                      Reject
-                    </Button>
-                  </>
-                )}
-                {change.status === "applied" && (
-                  <Button size="sm" variant="ghost" disabled={isBusy} onClick={() => onRevert(change)}>
-                    Revert
-                  </Button>
-                )}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-
-      {selected && (
-        <div className="mt-3 rounded border border-line-strong bg-panel p-2.5">
-          <div className="break-all text-[12px] font-semibold text-fg">
-            Review: {stagedFullPath(selected.root, selected.path)}
-          </div>
-          <div className="mt-1 break-all text-[11px] text-fg-faint">Run: {selected.run_id}</div>
-          <div className="mt-2 text-[10.5px] uppercase tracking-[0.08em] text-fg-faint">
-            {STAGED_SNAPSHOT_LABEL}
-          </div>
-          <pre className="mt-1 max-h-28 overflow-auto whitespace-pre-wrap break-words rounded bg-panel-2 p-2 text-[11px] text-fg-muted">
-            {selected.old_content ?? "(new file)"}
-          </pre>
-          <div className="mt-2 text-[10.5px] uppercase tracking-[0.08em] text-fg-faint">Proposed</div>
-          <pre className="mt-1 max-h-36 overflow-auto whitespace-pre-wrap break-words rounded bg-panel-2 p-2 text-[11px] text-fg-muted">
-            {selected.new_content}
-          </pre>
-        </div>
-      )}
-    </div>
-  );
-}
-
 function ModeButton({
   mode,
   active,
@@ -2140,23 +2006,6 @@ function formatApprovalTarget(target: unknown): string {
   } catch {
     return String(target);
   }
-}
-
-function stagedStatusVariant(
-  status: StagedChangeSummary["status"]
-): "neutral" | "success" | "warning" | "danger" | "info" {
-  if (status === "pending") return "warning";
-  if (status === "applied") return "success";
-  if (status === "conflict") return "danger";
-  if (status === "reverted") return "info";
-  return "neutral";
-}
-
-function formatBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes < 0) return "-";
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function formatMs(ms: number | undefined): string | null {
