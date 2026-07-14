@@ -16,7 +16,7 @@ import {
 import { toast } from "sonner";
 import { PageHeader } from "@/components/page";
 import { ContextPicker } from "@/components/workbench/context-picker";
-import { ProjectFilesPanel } from "@/components/workbench/project-files-panel";
+import { FileTree } from "@/components/workbench/file-tree";
 import { useEditorTabs } from "@/components/workbench/use-editor-tabs";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -1349,7 +1349,12 @@ export function Chat() {
               aria-labelledby="workbench-files-toggle"
               className="flex min-h-0 flex-1"
             >
-              <ProjectFilesPanel key={selectedProjectId} projectId={selectedProjectId} />
+              <FileTree
+                key={selectedProjectId}
+                projectId={selectedProjectId}
+                pendingPaths={pendingStagedPaths}
+                onOpenFile={openFileInEditor}
+              />
             </div>
           ) : (
             <div
