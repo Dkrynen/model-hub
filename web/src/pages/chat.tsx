@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
   Bot,
@@ -8,7 +8,6 @@ import {
   MessageSquare,
   Send,
   Settings2,
-  ShieldCheck,
   Sparkles,
   Square,
   Trash2,
@@ -18,6 +17,7 @@ import { toast } from "sonner";
 import { PageHeader } from "@/components/page";
 import { ContextPicker } from "@/components/workbench/context-picker";
 import { ProjectFilesPanel } from "@/components/workbench/project-files-panel";
+import { useEditorTabs } from "@/components/workbench/use-editor-tabs";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -86,6 +86,8 @@ import type {
   StagedChangeSummary,
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
+
+const EditorPane = lazy(() => import("@/components/workbench/editor-pane"));
 
 type Msg = WorkbenchMessage;
 type Mode = "ask" | "plan" | "explore" | "build";
@@ -216,6 +218,15 @@ export function Chat() {
   const [model, setModel] = useState(params.get("model") ?? "");
   const [mode, setMode] = useState<Mode>("plan");
   const [navigatorView, setNavigatorView] = useState<"threads" | "files">("threads");
+  const [mobilePane, setMobilePane] = useState<"files" | "editor" | "chat">("chat");
+  const [stagedOpen, setStagedOpen] = useState(true);
+  const [runDetailsOpen, setRunDetailsOpen] = useState(false);
+  const editor = useEditorTabs(selectedProjectId);
+
+  const openFileInEditor = (path: string, options?: { create?: boolean }) => {
+    editor.openFile(path, options);
+    setMobilePane("editor");
+  };
   const [messages, setMessages] = useState<Msg[]>([]);
   const [events, setEvents] = useState<WorkbenchEvent[]>([]);
   const [activeSessionId, setActiveSessionId] = useState("");
@@ -236,6 +247,15 @@ export function Chat() {
   const [approval, setApproval] = useState(initialApprovalState);
   const [stagedChanges, setStagedChanges] = useState<StagedChangeSummary[]>([]);
   const [selectedChange, setSelectedChange] = useState<StagedChangeDetail | null>(null);
+  const pendingStagedPaths = useMemo(
+    () =>
+      new Set(
+        stagedChanges
+          .filter((change) => change.status === "pending")
+          .map((change) => change.path)
+      ),
+    [stagedChanges]
+  );
   const [changeBusy, setChangeBusy] = useState("");
   const abortRef = useRef<AbortController | null>(null);
   const runInFlightRef = useRef(false);
@@ -600,6 +620,7 @@ export function Chat() {
   };
 
   const switchWorkspace = (next: string) => {
+    if (editor.hasDirty && !window.confirm("Discard unsaved editor changes?")) return;
     if (!next || next === activeWorkspaceRef.current) return;
     resetWorkbenchContext();
     activeWorkspaceRef.current = next;
@@ -611,6 +632,7 @@ export function Chat() {
   };
 
   const switchProject = (next: string) => {
+    if (editor.hasDirty && !window.confirm("Discard unsaved editor changes?")) return;
     if (!next || next === projectSelectionRef.current) return;
     resetWorkbenchContext();
     projectSelectionRef.current = next;
@@ -1248,8 +1270,33 @@ export function Chat() {
         </Button>
       </PageHeader>
 
-      <div className="grid min-h-[520px] grid-cols-1 gap-3 xl:h-[calc(100vh-150px)] xl:grid-cols-[270px_minmax(0,1fr)_320px]">
-        <aside className="flex h-[520px] min-h-[320px] flex-col overflow-hidden rounded-lg border border-line bg-panel xl:h-auto xl:min-h-0">
+      <div role="tablist" aria-label="Workbench panes" className="mb-3 flex gap-1 min-[960px]:hidden">
+        {([["files", "Files"], ["editor", "Editor"], ["chat", "Chat"]] as const).map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            role="tab"
+            aria-selected={mobilePane === id}
+            className={cn(
+              "flex-1 rounded border px-2 py-1.5 text-[12.5px] font-semibold transition-colors",
+              mobilePane === id
+                ? "border-verdant bg-verdant-soft/40 text-fg"
+                : "border-line bg-panel text-fg-muted hover:text-fg"
+            )}
+            onClick={() => setMobilePane(id)}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      <div className="grid min-h-[520px] grid-cols-1 gap-3 min-[960px]:h-[calc(100vh-150px)] min-[960px]:grid-cols-[260px_minmax(0,1fr)_380px]">
+        <aside
+          className={cn(
+            mobilePane === "files" ? "flex" : "hidden",
+            "h-[520px] min-h-[320px] flex-col overflow-hidden rounded-lg border border-line bg-panel min-[960px]:flex min-[960px]:h-auto min-[960px]:min-h-0"
+          )}
+        >
           <ContextPicker
             workspaces={workspaces.data ?? []}
             workspacesLoading={workspaces.loading}
@@ -1264,22 +1311,6 @@ export function Chat() {
             onProjectChange={switchProject}
             onRegister={registerProject}
           />
-
-          {mode === "build" && selectedProject && (
-            <div
-              id="workbench-sandbox-status"
-              role="status"
-              aria-live="polite"
-              aria-atomic="true"
-              className="border-b border-line px-3 pb-3"
-            >
-              <SandboxStatusPanel
-                projectId={selectedProject.id}
-                root={selectedProject.root}
-                check={sandboxCheck}
-              />
-            </div>
-          )}
 
           <div role="group" aria-label="Workbench navigator" className="flex border-b border-line p-1.5">
             <button
@@ -1364,10 +1395,87 @@ export function Chat() {
               </div>
             </div>
           )}
+
+          {(stagedChanges.length > 0 || selectedChange) && (
+            <div className="flex max-h-[45%] flex-col border-t border-line">
+              <button
+                type="button"
+                aria-expanded={stagedOpen}
+                className="flex items-center justify-between px-3 py-2 text-left"
+                onClick={() => setStagedOpen((open) => !open)}
+              >
+                <span className="text-[12px] font-semibold uppercase tracking-[0.08em] text-fg-faint">
+                  Staged changes
+                </span>
+                <Badge variant={pendingStagedPaths.size ? "warning" : "neutral"}>
+                  {pendingStagedPaths.size} pending
+                </Badge>
+              </button>
+              {stagedOpen && (
+                <div className="min-h-0 overflow-y-auto px-3 pb-3">
+                  <StagedChangesPanel
+                    changes={stagedChanges}
+                    selected={selectedChange}
+                    busy={changeBusy}
+                    onReview={(change) => void reviewStagedChange(change)}
+                    onApply={(change) => void applyChange(change)}
+                    onReject={(change) => void rejectChange(change)}
+                    onRevert={(change) => void revertChange(change)}
+                    onApplyAll={() => void applyAllChanges()}
+                  />
+                </div>
+              )}
+            </div>
+          )}
         </aside>
 
-        <section className="flex min-h-[520px] flex-col overflow-hidden rounded-lg border border-line bg-panel xl:min-h-0">
-          <div className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-2">
+        <section
+          className={cn(
+            mobilePane === "editor" ? "flex" : "hidden",
+            "min-h-[520px] flex-col overflow-hidden rounded-lg border border-line bg-panel min-[960px]:flex min-[960px]:min-h-0"
+          )}
+        >
+          <Suspense
+            fallback={<div className="p-4 text-[12.5px] text-fg-muted">Loading editor…</div>}
+          >
+            <EditorPane
+              tabs={editor.tabs}
+              buffers={editor.buffers}
+              dirty={editor.dirty}
+              emptyState={
+                <div className="flex flex-col items-center text-center">
+                  <Sparkles className="mb-3 h-7 w-7 text-verdant" />
+                  <div className="grid w-full max-w-2xl grid-cols-1 gap-2 sm:grid-cols-2">
+                    {SUGGESTIONS.map((s) => (
+                      <button
+                        key={s}
+                        onClick={() => send(s)}
+                        disabled={sessionLoading || projectMissing}
+                        className="min-h-[54px] rounded-lg border border-line bg-panel-2 px-3 py-2 text-left text-[13px] text-fg-muted transition-colors hover:border-line-strong hover:text-fg disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {s}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              }
+              onActivate={editor.activate}
+              onClose={editor.close}
+              onChangeDoc={editor.updateDoc}
+              onSave={editor.save}
+              onSaveAgain={editor.saveAgain}
+              onKeepEditing={editor.keepEditing}
+            />
+          </Suspense>
+        </section>
+
+        <aside
+          className={cn(
+            mobilePane === "chat" ? "flex" : "hidden",
+            "min-h-[520px] flex-col overflow-hidden rounded-lg border border-line bg-panel min-[960px]:flex min-[960px]:min-h-0"
+          )}
+        >
+          <div className="border-b border-line px-3 py-2">
             <div className="flex min-w-0 flex-1 items-center gap-2">
               <span className="text-[12px] uppercase tracking-[0.08em] text-fg-faint">Model</span>
               {installed.loading ? (
@@ -1391,8 +1499,7 @@ export function Chat() {
               {warming && <Badge variant="info" dot>Warming</Badge>}
               {model && runningModels.has(model) && <Badge variant="success" dot>Resident</Badge>}
             </div>
-
-            <div className="flex items-center gap-1 rounded border border-line bg-panel-2 p-0.5">
+            <div className="mt-2 flex items-center gap-1 rounded border border-line bg-panel-2 p-0.5">
               {MODES.map((item) => (
                 <ModeButton
                   key={item.id}
@@ -1410,29 +1517,42 @@ export function Chat() {
 
           <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto p-4">
             {messages.length === 0 ? (
-              <div className="flex h-full flex-col items-center justify-center text-center">
-                <Sparkles className="mb-3 h-7 w-7 text-verdant" />
-                <div className="grid w-full max-w-2xl grid-cols-1 gap-2 sm:grid-cols-2">
-                  {SUGGESTIONS.map((s) => (
-                    <button
-                      key={s}
-                      onClick={() => send(s)}
-                      disabled={sessionLoading || projectMissing}
-                      className="min-h-[54px] rounded-lg border border-line bg-panel-2 px-3 py-2 text-left text-[13px] text-fg-muted transition-colors hover:border-line-strong hover:text-fg disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      {s}
-                    </button>
-                  ))}
-                </div>
+              <div className="flex h-full items-center justify-center text-center text-[12.5px] text-fg-muted">
+                Start a run — suggestions live in the editor pane.
               </div>
             ) : (
-              <div className="mx-auto max-w-4xl space-y-5">
+              <div className="space-y-5">
                 {messages.map((m, i) => (
                   <Bubble key={`${m.role}-${i}`} role={m.role} content={m.content} model={model} />
                 ))}
               </div>
             )}
           </div>
+
+          {approval.pending && (
+            <div className="border-t border-line p-3">
+              <ApprovalCard
+                approval={approval.pending}
+                onDecision={(intent) => void answerPendingApproval(intent)}
+              />
+            </div>
+          )}
+
+          {mode === "build" && selectedProject && (
+            <div
+              id="workbench-sandbox-status"
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+              className="border-t border-line px-3 pb-3"
+            >
+              <SandboxStatusPanel
+                projectId={selectedProject.id}
+                root={selectedProject.root}
+                check={sandboxCheck}
+              />
+            </div>
+          )}
 
           <div className="border-t border-line p-3">
             <form
@@ -1469,89 +1589,61 @@ export function Chat() {
               )}
             </form>
           </div>
-        </section>
 
-        <aside className="flex min-h-[360px] flex-col overflow-hidden rounded-lg border border-line bg-panel xl:min-h-0">
-          <div className="border-b border-line p-3">
-            <div className="mb-2 flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2 text-[12px] font-semibold uppercase tracking-[0.08em] text-fg-faint">
-                <ShieldCheck className="h-3.5 w-3.5" /> Run
+          <div className="border-t border-line">
+            <button
+              type="button"
+              aria-expanded={runDetailsOpen}
+              className="flex w-full items-center justify-between px-3 py-2 text-left"
+              onClick={() => setRunDetailsOpen((open) => !open)}
+            >
+              <span className="text-[12px] font-semibold uppercase tracking-[0.08em] text-fg-faint">
+                Run details
+              </span>
+              <Badge variant="neutral">{events.length} events</Badge>
+            </button>
+            {runDetailsOpen && (
+              <div className="max-h-[40vh] space-y-3 overflow-y-auto px-3 pb-3">
+                <div className="grid grid-cols-2 gap-2 text-[12.5px]">
+                  <StatTile label="Session" value={activeSessionId ? shortId(activeSessionId) : "New"} />
+                  <StatTile label="Events" value={String(events.length)} />
+                </div>
+                <div className="mb-2 flex items-center gap-2 text-[12px] font-semibold uppercase tracking-[0.08em] text-fg-faint">
+                  <Settings2 className="h-3.5 w-3.5" /> System
+                </div>
+                <textarea
+                  value={system}
+                  onChange={(e) => setSystem(e.target.value)}
+                  placeholder="Optional system prompt"
+                  rows={4}
+                  className="w-full resize-none rounded border border-line bg-panel-2 px-3 py-2 text-[13px] text-fg outline-none placeholder:text-fg-faint focus:border-line-strong"
+                />
+                <div className="mb-2 flex items-center gap-2 text-[12px] font-semibold uppercase tracking-[0.08em] text-fg-faint">
+                  <Bot className="h-3.5 w-3.5" /> Events
+                </div>
+                {events.length ? (
+                  <div className="space-y-2">
+                    {events.slice().reverse().map((event, i) => (
+                      <RunEvent key={`${event.type}-${i}`} event={event} />
+                    ))}
+                  </div>
+                ) : (
+                  <div className="rounded border border-dashed border-line px-3 py-8 text-center text-[12.5px] text-fg-muted">
+                    No agent events
+                  </div>
+                )}
+                <div className="mb-2 text-[12px] font-semibold uppercase tracking-[0.08em] text-fg-faint">
+                  Stats
+                </div>
+                {lastStats ? (
+                  <div className="grid grid-cols-2 gap-2">
+                    <StatTile label="TTFT" value={formatMs(lastStats.ttft_ms) ?? "-"} />
+                    <StatTile label="Speed" value={lastStats.tokens_per_second ? `${Math.round(lastStats.tokens_per_second)} tok/s` : "-"} />
+                  </div>
+                ) : (
+                  <div className="text-[12.5px] text-fg-muted">No stats for this run</div>
+                )}
               </div>
-              <Badge variant={mode === "build" ? "warning" : mode === "ask" ? "neutral" : "accent"}>
-                {modeLabel(mode)}
-              </Badge>
-            </div>
-            <div className="grid grid-cols-2 gap-2 text-[12.5px]">
-              <StatTile label="Session" value={activeSessionId ? shortId(activeSessionId) : "New"} />
-              <StatTile label="Events" value={String(events.length)} />
-            </div>
-          </div>
-
-          {approval.pending && (
-            <div className="border-b border-line p-3">
-              <ApprovalCard
-                approval={approval.pending}
-                onDecision={(intent) => void answerPendingApproval(intent)}
-              />
-            </div>
-          )}
-
-          {(stagedChanges.length > 0 || selectedChange) && (
-            <div className="max-h-[42%] overflow-y-auto border-b border-line p-3">
-              <StagedChangesPanel
-                changes={stagedChanges}
-                selected={selectedChange}
-                busy={changeBusy}
-                onReview={(change) => void reviewStagedChange(change)}
-                onApply={(change) => void applyChange(change)}
-                onReject={(change) => void rejectChange(change)}
-                onRevert={(change) => void revertChange(change)}
-                onApplyAll={() => void applyAllChanges()}
-              />
-            </div>
-          )}
-
-          <div className="border-b border-line p-3">
-            <div className="mb-2 flex items-center gap-2 text-[12px] font-semibold uppercase tracking-[0.08em] text-fg-faint">
-              <Settings2 className="h-3.5 w-3.5" /> System
-            </div>
-            <textarea
-              value={system}
-              onChange={(e) => setSystem(e.target.value)}
-              placeholder="Optional system prompt"
-              rows={4}
-              className="w-full resize-none rounded border border-line bg-panel-2 px-3 py-2 text-[13px] text-fg outline-none placeholder:text-fg-faint focus:border-line-strong"
-            />
-          </div>
-
-          <div className="min-h-0 flex-1 overflow-y-auto p-3">
-            <div className="mb-2 flex items-center gap-2 text-[12px] font-semibold uppercase tracking-[0.08em] text-fg-faint">
-              <Bot className="h-3.5 w-3.5" /> Events
-            </div>
-            {events.length ? (
-              <div className="space-y-2">
-                {events.slice().reverse().map((event, i) => (
-                  <RunEvent key={`${event.type}-${i}`} event={event} />
-                ))}
-              </div>
-            ) : (
-              <div className="rounded border border-dashed border-line px-3 py-8 text-center text-[12.5px] text-fg-muted">
-                No agent events
-              </div>
-            )}
-          </div>
-
-          <div className="border-t border-line p-3">
-            <div className="mb-2 text-[12px] font-semibold uppercase tracking-[0.08em] text-fg-faint">
-              Stats
-            </div>
-            {lastStats ? (
-              <div className="grid grid-cols-2 gap-2">
-                <StatTile label="TTFT" value={formatMs(lastStats.ttft_ms) ?? "-"} />
-                <StatTile label="Speed" value={lastStats.tokens_per_second ? `${Math.round(lastStats.tokens_per_second)} tok/s` : "-"} />
-              </div>
-            ) : (
-              <div className="text-[12.5px] text-fg-muted">No stats for this run</div>
             )}
           </div>
         </aside>
