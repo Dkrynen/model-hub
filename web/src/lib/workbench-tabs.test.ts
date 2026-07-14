@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   activateTab,
   beginSave,
+  changeIdOfTabId,
   closeTab,
   emptyTabs,
   filePathOfTabId,
@@ -83,6 +84,12 @@ describe("tab transitions", () => {
     const state = openTab(emptyTabs, file("a.txt"));
     expect(hasDirtyFileTabs(state, new Set(["a.txt"]))).toBe(true);
     expect(hasDirtyFileTabs(state, new Set(["other.txt"]))).toBe(false);
+  });
+
+  it("changeIdOfTabId extracts the change id from a diff tab id; null for file ids", () => {
+    expect(changeIdOfTabId("diff:abc123")).toBe("abc123");
+    expect(changeIdOfTabId("file:src/a.ts")).toBeNull();
+    expect(changeIdOfTabId("diff:")).toBe("");
   });
 });
 

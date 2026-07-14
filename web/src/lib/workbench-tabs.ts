@@ -50,6 +50,10 @@ export function filePathOfTabId(id: string): string | null {
   return id.startsWith("file:") ? id.slice("file:".length) : null;
 }
 
+export function changeIdOfTabId(id: string): string | null {
+  return id.startsWith("diff:") ? id.slice("diff:".length) : null;
+}
+
 export function hasDirtyFileTabs(state: TabsState, dirty: ReadonlySet<string>): boolean {
   return state.tabs.some((tab) => tab.kind === "file" && dirty.has(tab.key));
 }
