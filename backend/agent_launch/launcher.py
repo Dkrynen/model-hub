@@ -3,9 +3,12 @@ agent-capable local model, bake a num_ctx-raised variant, point stock OpenCode a
 it, and launch. The hardware brain is the moat; OpenCode is wrapped, never edited."""
 from pathlib import Path
 
-from .variant import ensure_agent_variant
+from .variant import ensure_agent_variant, is_installed
 from .config_writer import write_opencode_config, write_agent_commands
 from .opencode_bin import resolve_opencode_binary
+
+# Consider the whole catalog when ranking, then filter to what is actually on disk.
+_CANDIDATE_DEPTH = 100
 
 
 def _default_recommend(info, use_case, top_k):
@@ -64,20 +67,41 @@ def launch_agent(project_dir, *,
     host = cfg.ollama_host
 
     info = detect_fn()
-    recs = recommend_fn(info, use_case="agent", top_k=1)
+    recs = recommend_fn(info, use_case="agent", top_k=_CANDIDATE_DEPTH)
     if not recs:
         out("No agent-capable local model fits this machine. "
             "Try installing a 7B+ tool-calling model (e.g. `ollama pull qwen3:8b`) "
             "and re-run `lac agent`.")
         return 1
 
-    rec = recs[0]
+    provider = provider_factory()
+    installed = _installed_names(provider)
+
+    # Rank by fit for the box, but only ever run a model the user already has:
+    # building a variant from an absent base makes Ollama pull it (GBs, unasked).
+    rec = next((r for r in recs if is_installed(r.model.id, installed)), None)
+    if rec is None:
+        best = recs[0]
+        out("None of the agent-capable models for this machine are installed.")
+        out("LAC's best fit for your box is %s. To use it:" % best.model.id)
+        out("    ollama pull %s" % best.model.id)
+        alternatives = [r.model.id for r in recs[1:4]]
+        if alternatives:
+            out("Or a lighter option: %s" % ", ".join(alternatives))
+        out("Then re-run `lac agent`.")
+        return 1
+
     base = rec.model.id
     num_ctx = max(int(rec.context_used), AGENT_MIN_CONTEXT)
 
-    provider = provider_factory()
+    # Rank-0 is the best fit for the box; if it isn't installed, say so rather than
+    # quietly running something worse.
+    if rec is not recs[0]:
+        out("Using %s (installed). A better fit for your box is %s - "
+            "`ollama pull %s` to use it." % (base, recs[0].model.id, recs[0].model.id))
+
     variant = ensure_variant_fn(base, num_ctx,
-                                list_names=lambda: _installed_names(provider),
+                                list_names=lambda: installed,
                                 create=provider.create)
 
     write_config_fn(project_dir, variant, host)

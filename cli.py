@@ -858,12 +858,13 @@ def cmd_agent(args):
     try:
         from backend.agent_launch.launcher import launch_agent
         from backend.agent_launch.opencode_bin import OpenCodeNotFound
+        from backend.agent_launch.variant import BaseModelNotInstalled
     except ImportError as e:
         eprint(f"{C['red']}Error: {e}{C['reset']}")
         sys.exit(1)
     try:
         rc = launch_agent(Path(args.dir))
-    except OpenCodeNotFound as e:
+    except (OpenCodeNotFound, BaseModelNotInstalled) as e:
         eprint(f"{C['yellow']}{e}{C['reset']}")
         sys.exit(1)
     sys.exit(rc)

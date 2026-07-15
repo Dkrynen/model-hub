@@ -4,7 +4,11 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
 
-from backend.agent_launch.variant import agent_variant_name, ensure_agent_variant
+from backend.agent_launch.variant import (
+    BaseModelNotInstalled,
+    agent_variant_name,
+    ensure_agent_variant,
+)
 
 
 def test_agent_variant_name_appends_suffix():
@@ -23,15 +27,53 @@ def test_ensure_creates_variant_when_absent():
     assert calls == [("qwen3:8b-agent", "qwen3:8b", {"num_ctx": 32768})]
 
 
-def test_ensure_is_idempotent_when_variant_exists():
+def test_ensure_refuses_when_base_model_is_not_installed():
+    """Ollama's /api/create silently PULLS the base from the registry when it is
+    not local — an unannounced multi-GB download (18.56GB for qwen3:30b-a3b).
+    The seam must refuse rather than let that happen.
+    """
     calls = []
     def fake_create(name, from_model, params):
         calls.append(name)
-    variant = ensure_agent_variant("qwen3:8b", 32768,
+
+    with pytest.raises(BaseModelNotInstalled) as exc:
+        ensure_agent_variant("qwen3:30b-a3b", 32768,
+                             list_names=lambda: ["gpt-oss:20b"],   # base absent
+                             create=fake_create)
+
+    assert "qwen3:30b-a3b" in str(exc.value)
+    assert calls == [], "create must NOT run when the base model is not installed"
+
+
+def test_ensure_matches_installed_latest_tag():
+    """Ollama reports a bare `qwen3` pull as `qwen3:latest`; treat them as the same."""
+    calls = []
+    def fake_create(name, from_model, params):
+        calls.append(name)
+    variant = ensure_agent_variant("qwen3", 32768,
+                                   list_names=lambda: ["qwen3:latest"],
+                                   create=fake_create)
+    assert variant == "qwen3-agent"
+    assert calls == ["qwen3-agent"]
+
+
+def test_ensure_rebuilds_an_existing_variant_so_num_ctx_always_matches():
+    """An existing `-agent` variant may carry a stale num_ctx from an earlier run,
+    which would leave the agent running a context the launcher did not ask for (and
+    reports wrongly). Rebuilding is idempotent and instant (~0.05s, no download)
+    when the base is local, so always restate the parameters.
+    """
+    calls = []
+    def fake_create(name, from_model, params):
+        calls.append((name, from_model, params))
+
+    variant = ensure_agent_variant("qwen3:8b", 65536,
                                    list_names=lambda: ["qwen3:8b", "qwen3:8b-agent"],
                                    create=fake_create)
+
     assert variant == "qwen3:8b-agent"
-    assert calls == [], "create must not be called when the variant already exists"
+    assert calls == [("qwen3:8b-agent", "qwen3:8b", {"num_ctx": 65536})], \
+        "existing variant must be rebuilt with the requested num_ctx"
 
 
 class _FakeResp:

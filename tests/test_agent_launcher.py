@@ -81,3 +81,45 @@ def test_launch_returns_1_when_no_model_fits(tmp_path):
     rc = launch_agent(tmp_path, **_base_kwargs(events, tmp_path, []))
     assert rc == 1
     assert "launch" not in events, "must not launch OpenCode when no model fits"
+
+
+def test_launch_prefers_an_installed_model_over_a_higher_ranked_uninstalled_one(tmp_path):
+    """The catalog's best model for the BOX may not be on disk. Creating a variant
+    from an absent base makes Ollama silently pull it (18.56GB, observed live), so
+    the launcher must pick the best model the user actually has.
+    """
+    events = {}
+    recs = [_rec("qwen3:30b-a3b", 131072), _rec("qwen3:8b", 32768)]  # only qwen3:8b installed
+    rc = launch_agent(tmp_path, **_base_kwargs(events, tmp_path, recs))
+    assert rc == 0
+    assert events["ensure"] == ("qwen3:8b", 32768), "must build from the INSTALLED model"
+    assert events["config"][1] == "qwen3:8b-agent"
+
+
+def test_launch_refuses_and_guides_when_no_recommended_model_is_installed(tmp_path):
+    events = {}
+    printed = []
+    kwargs = _base_kwargs(events, tmp_path, [_rec("qwen3:30b-a3b", 131072)])
+    kwargs["out"] = lambda *a, **k: printed.append(" ".join(str(x) for x in a))
+
+    rc = launch_agent(tmp_path, **kwargs)
+
+    assert rc == 1
+    assert "ensure" not in events, "must not create a variant from an absent base"
+    assert "launch" not in events, "must not launch OpenCode"
+    text = "\n".join(printed)
+    assert "ollama pull" in text, "must tell the user how to get a model"
+    assert "qwen3:30b-a3b" in text, "must name the model it recommends"
+
+
+def test_launch_mentions_a_better_model_the_user_could_pull(tmp_path):
+    events = {}
+    printed = []
+    recs = [_rec("qwen3:30b-a3b", 131072), _rec("qwen3:8b", 32768)]
+    kwargs = _base_kwargs(events, tmp_path, recs)
+    kwargs["out"] = lambda *a, **k: printed.append(" ".join(str(x) for x in a))
+
+    launch_agent(tmp_path, **kwargs)
+
+    text = "\n".join(printed)
+    assert "qwen3:30b-a3b" in text, "should surface the better option it did not use"
