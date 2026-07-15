@@ -9,6 +9,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useAsync } from "@/lib/hooks";
 import { api } from "@/lib/api";
 import { pullWithToast } from "@/lib/installer";
+import { StudioLauncher } from "@/components/studio-launcher";
 
 export function Dashboard() {
   const navigate = useNavigate();
@@ -33,6 +34,8 @@ export function Dashboard() {
           <Zap /> Scan &amp; recommend
         </Button>
       </PageHeader>
+
+      <StudioLauncher />
 
       {scan.error ? (
         <ErrorState message={`Couldn’t scan hardware: ${scan.error}`} onRetry={scan.reload} />

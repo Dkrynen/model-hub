@@ -95,6 +95,18 @@ export interface InstalledModel {
   modified: string;
   digest_short: string;
 }
+export interface OllamaModelProfile extends InstalledModel {
+  digest: string;
+  format: string | null;
+  family: string | null;
+  families: string[] | null;
+  parameter_size: string | null;
+  quantization_level: string | null;
+  context_length: number | null;
+}
+export interface OllamaModelProfilesResponse {
+  profiles: OllamaModelProfile[];
+}
 export interface OllamaStatus {
   running: boolean;
   version: string | null;
@@ -247,6 +259,8 @@ export interface PerformanceDiagnosis {
 
 export interface PerformanceMetrics {
   model: string;
+  protocol_id?: string;
+  num_ctx?: number;
   prompt?: string;
   num_predict?: number;
   eval_count?: number;
@@ -264,7 +278,9 @@ export interface PerformanceMetrics {
 export interface PerformanceDiagnosticsResponse {
   model: string | null;
   installed_models: string[];
+  installed_models_reported: boolean;
   running_models: string[];
+  running_models_reported: boolean;
   history: PerformanceMetrics[];
   latest: PerformanceMetrics | null;
   diagnosis: PerformanceDiagnosis;

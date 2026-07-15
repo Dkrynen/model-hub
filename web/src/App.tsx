@@ -9,20 +9,21 @@ import { Dashboard } from "@/pages/dashboard";
 import { Browse } from "@/pages/browse";
 import { Scan } from "@/pages/scan";
 import { Installed } from "@/pages/installed";
-import { Chat } from "@/pages/chat";
+import { Studio } from "@/pages/studio";
 import { Downloads } from "@/pages/downloads";
-import { Performance } from "@/pages/performance";
+import { Lab } from "@/pages/lab";
 import { Docs } from "@/pages/docs";
 import { Settings } from "@/pages/settings";
 import { Pro } from "./pages/pro";
 import { Account } from "./pages/account";
 import { CloudActivity } from "./pages/cloud-activity";
+import { LegacyRouteRedirect } from "@/components/legacy-route-redirect";
 
 export default function App() {
   const { theme } = useTheme();
   const navigate = useNavigate();
   const location = useLocation();
-  const isWorkbench = location.pathname === "/chat";
+  const isWorkbench = location.pathname === "/studio" || location.pathname === "/chat";
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
 
@@ -75,8 +76,10 @@ export default function App() {
               <Route path="/browse" element={<Browse />} />
               <Route path="/scan" element={<Scan />} />
               <Route path="/installed" element={<Installed />} />
-              <Route path="/chat" element={<Chat />} />
-              <Route path="/performance" element={<Performance />} />
+              <Route path="/studio" element={<Studio />} />
+              <Route path="/chat" element={<LegacyRouteRedirect to="/studio" preserveLocation />} />
+              <Route path="/lab" element={<Lab />} />
+              <Route path="/performance" element={<LegacyRouteRedirect to="/lab" preserveLocation />} />
               <Route path="/downloads" element={<Downloads />} />
               <Route path="/pro" element={<Pro />} />
               <Route path="/account" element={<Account />} />

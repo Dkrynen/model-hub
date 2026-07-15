@@ -1,5 +1,5 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import {
   Bot,
   Compass,
@@ -85,11 +85,12 @@ import type {
   StagedChangeSummary,
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { parseStudioLaunch, type StudioMode } from "@/lib/studio-launch";
 
 const EditorPane = lazy(() => import("@/components/workbench/editor-pane"));
 
 type Msg = WorkbenchMessage;
-type Mode = "ask" | "plan" | "explore" | "build";
+type Mode = StudioMode;
 
 interface WorkbenchEvent {
   type: string;
@@ -127,6 +128,8 @@ const MODES: { id: Mode; label: string; icon: typeof MessageSquare }[] = [
   { id: "explore", label: "Explore", icon: Compass },
   { id: "build", label: "Build", icon: Hammer },
 ];
+
+const STUDIO_PANES = [["files", "Files"], ["chat", "Run"], ["editor", "Output"]] as const;
 
 const WORKBENCH_SESSION_LIMIT = 80;
 
@@ -184,6 +187,21 @@ function useWorkspaceProjects(workspace: string) {
 
 export function Chat() {
   const [params] = useSearchParams();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const [launch] = useState(() => parseStudioLaunch(params, location.state));
+
+  useEffect(() => {
+    if (!params.has("prompt")) return;
+    const cleaned = new URLSearchParams(params);
+    cleaned.delete("prompt");
+    const search = cleaned.toString();
+    const priorState = location.state && typeof location.state === "object" ? location.state : {};
+    navigate(
+      { pathname: location.pathname, search: search ? `?${search}` : "", hash: location.hash },
+      { replace: true, state: { ...priorState, studioLaunch: launch } },
+    );
+  }, [launch, location.hash, location.pathname, location.state, navigate, params]);
   const installed = useAsync(() => api.installed());
   const config = useAsync(() => api.config());
   const workspaces = useAsync(() => api.workspaces());
@@ -214,13 +232,27 @@ export function Chat() {
     [activeWorkspace, projectFilter]
   );
 
-  const [model, setModel] = useState(params.get("model") ?? "");
-  const [mode, setMode] = useState<Mode>("plan");
+  const [model, setModel] = useState(launch.model);
+  const [mode, setMode] = useState<Mode>(launch.mode);
   const [navigatorView, setNavigatorView] = useState<"threads" | "files">("threads");
   const [mobilePane, setMobilePane] = useState<"files" | "editor" | "chat">("chat");
   const [stagedOpen, setStagedOpen] = useState(true);
   const [runDetailsOpen, setRunDetailsOpen] = useState(false);
   const editor = useEditorTabs(selectedProjectId);
+
+  const handleMobilePaneKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    const current = STUDIO_PANES.findIndex(([id]) => id === mobilePane);
+    let next = current;
+    if (event.key === "ArrowRight") next = (current + 1) % STUDIO_PANES.length;
+    else if (event.key === "ArrowLeft") next = (current - 1 + STUDIO_PANES.length) % STUDIO_PANES.length;
+    else if (event.key === "Home") next = 0;
+    else if (event.key === "End") next = STUDIO_PANES.length - 1;
+    else return;
+    event.preventDefault();
+    const pane = STUDIO_PANES[next][0];
+    setMobilePane(pane);
+    event.currentTarget.querySelector<HTMLButtonElement>(`#studio-${pane}-tab`)?.focus();
+  };
 
   const openFileInEditor = (path: string, options?: { create?: boolean }) => {
     editor.openFile(path, options);
@@ -229,7 +261,7 @@ export function Chat() {
   const [messages, setMessages] = useState<Msg[]>([]);
   const [events, setEvents] = useState<WorkbenchEvent[]>([]);
   const [activeSessionId, setActiveSessionId] = useState("");
-  const [input, setInput] = useState("");
+  const [input, setInput] = useState(launch.prompt);
   const [system, setSystem] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [sessionLoading, setSessionLoading] = useState(false);
@@ -595,7 +627,7 @@ export function Chat() {
     setLastStats(null);
   };
 
-  const resetWorkbenchContext = () => {
+  const resetWorkbenchContext = ({ preserveInput = false }: { preserveInput?: boolean } = {}) => {
     contextGenerationRef.current += 1;
     registrationRequestSequenceRef.current += 1;
     registeringProjectRef.current = false;
@@ -609,7 +641,7 @@ export function Chat() {
     setMessages([]);
     setEvents([]);
     setSystem("");
-    setInput("");
+    if (!preserveInput) setInput("");
     setLastStats(null);
   };
 
@@ -692,7 +724,9 @@ export function Chat() {
   useEffect(() => {
     if (workspaceContextRef.current === activeWorkspace) return;
     workspaceContextRef.current = activeWorkspace;
-    resetWorkbenchContext();
+    resetWorkbenchContext({
+      preserveInput: Boolean(input) && messages.length === 0 && !activeSessionId,
+    });
     projectSelectionRef.current = "";
     selectedProjectIdRef.current = "";
     setProjectSelection("");
@@ -749,7 +783,7 @@ export function Chat() {
       );
     } catch (e) {
       if (isActiveRun(generation) && (e as Error).name !== "AbortError") {
-        toast.error("Workbench error", { description: e instanceof Error ? e.message : String(e) });
+        toast.error("Studio error", { description: e instanceof Error ? e.message : String(e) });
       }
     } finally {
       runInFlightRef.current = false;
@@ -1222,7 +1256,7 @@ export function Chat() {
 
   return (
     <>
-      <PageHeader title="Workbench" className="mb-3">
+      <PageHeader title="Studio" className="mb-3">
         <Button variant="ghost" size="sm" onClick={newSession}>
           <MessageSquare /> New
         </Button>
@@ -1231,13 +1265,21 @@ export function Chat() {
         </Button>
       </PageHeader>
 
-      <div role="tablist" aria-label="Workbench panes" className="mb-3 flex gap-1 min-[960px]:hidden">
-        {([["files", "Files"], ["editor", "Editor"], ["chat", "Chat"]] as const).map(([id, label]) => (
+      <div
+        role="tablist"
+        aria-label="Studio panes"
+        className="mb-3 flex gap-1 min-[1440px]:hidden"
+        onKeyDown={handleMobilePaneKeyDown}
+      >
+        {STUDIO_PANES.map(([id, label]) => (
           <button
             key={id}
             type="button"
             role="tab"
+            id={`studio-${id}-tab`}
+            aria-controls={`studio-${id}-panel`}
             aria-selected={mobilePane === id}
+            tabIndex={mobilePane === id ? 0 : -1}
             className={cn(
               "flex-1 rounded border px-2 py-1.5 text-[12.5px] font-semibold transition-colors",
               mobilePane === id
@@ -1251,11 +1293,14 @@ export function Chat() {
         ))}
       </div>
 
-      <div className="grid min-h-[520px] grid-cols-1 gap-3 min-[960px]:h-[calc(100vh-150px)] min-[960px]:grid-cols-[260px_minmax(0,1fr)_380px]">
+      <div className="grid min-h-[520px] grid-cols-1 gap-3 min-[1440px]:h-[calc(100vh-150px)] min-[1440px]:grid-cols-[250px_minmax(480px,1fr)_minmax(400px,620px)]">
         <aside
+          id="studio-files-panel"
+          role="tabpanel"
+          aria-labelledby="studio-files-tab"
           className={cn(
             mobilePane === "files" ? "flex" : "hidden",
-            "h-[520px] min-h-[320px] flex-col overflow-hidden rounded-lg border border-line bg-panel min-[960px]:flex min-[960px]:h-auto min-[960px]:min-h-0"
+            "order-1 h-[520px] min-h-[320px] flex-col overflow-hidden rounded-lg border border-line bg-panel min-[1440px]:flex min-[1440px]:h-auto min-[1440px]:min-h-0"
           )}
         >
           <ContextPicker
@@ -1273,7 +1318,7 @@ export function Chat() {
             onRegister={registerProject}
           />
 
-          <div role="group" aria-label="Workbench navigator" className="flex border-b border-line p-1.5">
+          <div role="group" aria-label="Studio navigator" className="flex border-b border-line p-1.5">
             <button
               type="button"
               id="workbench-threads-toggle"
@@ -1394,65 +1439,24 @@ export function Chat() {
           )}
         </aside>
 
-        <section
-          className={cn(
-            mobilePane === "editor" ? "flex" : "hidden",
-            "min-h-[520px] flex-col overflow-hidden rounded-lg border border-line bg-panel min-[960px]:flex min-[960px]:min-h-0"
-          )}
-        >
-          <Suspense
-            fallback={<div className="p-4 text-[12.5px] text-fg-muted">Loading editor…</div>}
-          >
-            <EditorPane
-              tabs={editor.tabs}
-              buffers={editor.buffers}
-              dirty={editor.dirty}
-              emptyState={
-                <div className="flex flex-col items-center text-center">
-                  <Sparkles className="mb-3 h-7 w-7 text-verdant" />
-                  <div className="grid w-full max-w-2xl grid-cols-1 gap-2 sm:grid-cols-2">
-                    {SUGGESTIONS.map((s) => (
-                      <button
-                        key={s}
-                        onClick={() => send(s)}
-                        disabled={sessionLoading || projectMissing}
-                        className="min-h-[54px] rounded-lg border border-line bg-panel-2 px-3 py-2 text-left text-[13px] text-fg-muted transition-colors hover:border-line-strong hover:text-fg disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        {s}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              }
-              onActivate={editor.activate}
-              onClose={editor.close}
-              onChangeDoc={editor.updateDoc}
-              onSave={editor.save}
-              onSaveAgain={editor.saveAgain}
-              onKeepEditing={editor.keepEditing}
-              diffTabs={editor.diffTabs}
-              onDiffApply={(id) => void onDiffApply(id)}
-              onDiffReject={(id) => void onDiffReject(id)}
-              onDiffRevert={(id) => void onDiffRevert(id)}
-              onRefreshDiff={(id) => editor.refreshDiff(id)}
-            />
-          </Suspense>
-        </section>
-
         <aside
+          id="studio-chat-panel"
+          role="tabpanel"
+          aria-labelledby="studio-chat-tab"
           className={cn(
             mobilePane === "chat" ? "flex" : "hidden",
-            "min-h-[520px] flex-col overflow-hidden rounded-lg border border-line bg-panel min-[960px]:flex min-[960px]:min-h-0"
+            "order-2 min-h-[520px] flex-col overflow-hidden rounded-lg border border-line bg-panel min-[1440px]:flex min-[1440px]:min-h-0"
           )}
         >
           <div className="border-b border-line px-3 py-2">
-            <div className="flex min-w-0 flex-1 items-center gap-2">
-              <span className="text-[12px] uppercase tracking-[0.08em] text-fg-faint">Model</span>
+            <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+              <Badge className="shrink-0 whitespace-nowrap" variant="success" dot>Ollama</Badge>
+              <span className="hidden shrink-0 text-[12px] uppercase tracking-[0.08em] text-fg-faint sm:inline">Model</span>
               {installed.loading ? (
                 <Skeleton className="h-8 w-48" />
               ) : models.length ? (
                 <Select value={model} onValueChange={setModel}>
-                  <SelectTrigger className="h-8 w-full max-w-[280px]">
+                  <SelectTrigger className="h-8 min-w-[140px] flex-1 sm:max-w-[240px]">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -1466,8 +1470,8 @@ export function Chat() {
               ) : (
                 <span className="text-[13px] text-fg-muted">No models installed</span>
               )}
-              {warming && <Badge variant="info" dot>Warming</Badge>}
-              {model && runningModels.has(model) && <Badge variant="success" dot>Resident</Badge>}
+              {warming && <Badge className="shrink-0 whitespace-nowrap" variant="info" dot>Warming</Badge>}
+              {model && runningModels.has(model) && <Badge className="shrink-0 whitespace-nowrap" variant="success" dot>Resident</Badge>}
             </div>
             <div className="mt-2 flex items-center gap-1 rounded border border-line bg-panel-2 p-0.5">
               {MODES.map((item) => (
@@ -1483,12 +1487,30 @@ export function Chat() {
                 />
               ))}
             </div>
+            {mode === "plan" && (
+              <p className="mt-2 text-[11.5px] text-fg-faint">Plan responses are model output — not executed.</p>
+            )}
           </div>
 
           <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto p-4">
             {messages.length === 0 ? (
-              <div className="flex h-full items-center justify-center text-center text-[12.5px] text-fg-muted">
-                Start a run — suggestions live in the editor pane.
+              <div className="flex h-full flex-col items-center justify-center text-center">
+                <Sparkles className="mb-3 h-7 w-7 text-verdant" />
+                <h2 className="text-[14px] font-semibold text-fg">What do you want to work on?</h2>
+                <p className="mt-1 text-[12px] text-fg-muted">Choose a draft to edit it. Nothing runs until you press the action button.</p>
+                <div className="mt-4 grid w-full max-w-xl grid-cols-1 gap-2 sm:grid-cols-2">
+                  {SUGGESTIONS.map((s) => (
+                    <button
+                      key={s}
+                      type="button"
+                      onClick={() => setInput(s)}
+                      disabled={sessionLoading}
+                      className="min-h-[54px] rounded-lg border border-line bg-panel-2 px-3 py-2 text-left text-[12.5px] text-fg-muted transition-colors hover:border-line-strong hover:text-fg disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {s}
+                    </button>
+                  ))}
+                </div>
               </div>
             ) : (
               <div className="space-y-5">
@@ -1532,7 +1554,9 @@ export function Chat() {
               }}
               className="flex items-end gap-2"
             >
+              <label htmlFor="studio-prompt" className="sr-only">Studio prompt</label>
               <textarea
+                id="studio-prompt"
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 placeholder={
@@ -1540,7 +1564,7 @@ export function Chat() {
                     ? sessionLoading
                       ? "Loading session..."
                       : projectMissing
-                      ? "Select a registered project to start"
+                      ? "Select a project to start"
                       : `Message ${modeLabel(mode)} with ${model}`
                     : "Install a model to start"
                 }
@@ -1617,6 +1641,46 @@ export function Chat() {
             )}
           </div>
         </aside>
+
+        <section
+          id="studio-editor-panel"
+          role="tabpanel"
+          aria-labelledby="studio-editor-tab"
+          className={cn(
+            mobilePane === "editor" ? "flex" : "hidden",
+            "order-3 min-h-[520px] flex-col overflow-hidden rounded-lg border border-line bg-panel min-[1440px]:flex min-[1440px]:min-h-0"
+          )}
+        >
+          <Suspense
+            fallback={<div className="p-4 text-[12.5px] text-fg-muted">Loading editor…</div>}
+          >
+            <EditorPane
+              tabs={editor.tabs}
+              buffers={editor.buffers}
+              dirty={editor.dirty}
+              emptyState={
+                <div className="flex flex-col items-center text-center">
+                  <Sparkles className="mb-3 h-7 w-7 text-verdant" />
+                  <div className="text-[13px] font-semibold text-fg">Output inspector</div>
+                  <p className="mt-1 max-w-sm text-[12.5px] leading-relaxed text-fg-muted">
+                    Open a project file or review a staged change here. Studio will never render arbitrary model HTML as a live preview.
+                  </p>
+                </div>
+              }
+              onActivate={editor.activate}
+              onClose={editor.close}
+              onChangeDoc={editor.updateDoc}
+              onSave={editor.save}
+              onSaveAgain={editor.saveAgain}
+              onKeepEditing={editor.keepEditing}
+              diffTabs={editor.diffTabs}
+              onDiffApply={(id) => void onDiffApply(id)}
+              onDiffReject={(id) => void onDiffReject(id)}
+              onDiffRevert={(id) => void onDiffRevert(id)}
+              onRefreshDiff={(id) => editor.refreshDiff(id)}
+            />
+          </Suspense>
+        </section>
       </div>
     </>
   );

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { Activity, Clock3, Gauge, Play, RefreshCw, Zap } from "lucide-react";
 import { PageHeader, ErrorState, EmptyState } from "@/components/page";
@@ -36,10 +36,11 @@ function stateVariant(state: PerformanceDiagnosis["state"]): BadgeProps["variant
   return "neutral";
 }
 
-export function Performance() {
+export function Performance({ embedded = false }: { embedded?: boolean }) {
   const [model, setModel] = useState("");
   const [probe, setProbe] = useState<PerformanceProbeResponse | null>(null);
   const [probing, setProbing] = useState(false);
+  const probeGeneration = useRef(0);
   const diagnostics = useAsync(() => api.performanceDiagnostics(model || undefined), [model]);
 
   useEffect(() => {
@@ -50,32 +51,64 @@ export function Performance() {
   const metrics = probe?.metrics ?? diagnostics.data?.latest ?? null;
   const diagnosis = probe?.diagnosis ?? diagnostics.data?.diagnosis ?? null;
   const installed = diagnostics.data?.installed_models ?? [];
+  const installedReported = diagnostics.data?.installed_models_reported === true;
   const running = diagnostics.data?.running_models ?? [];
+  const runningReported = diagnostics.data?.running_models_reported === true;
 
   async function runProbe() {
     if (!model) return;
+    const generation = ++probeGeneration.current;
+    const requestedModel = model;
     setProbing(true);
     setProbe(null);
     try {
-      const result = await api.performanceProbe(model);
+      const result = await api.performanceProbe(requestedModel);
+      if (probeGeneration.current !== generation) return;
       setProbe(result);
-      diagnostics.reload();
+      void diagnostics.reload();
+    } catch (error) {
+      if (probeGeneration.current !== generation) return;
+      setProbe({
+        model: requestedModel,
+        state: "failed",
+        error: error instanceof Error ? error.message : String(error),
+      });
     } finally {
-      setProbing(false);
+      if (probeGeneration.current === generation) setProbing(false);
     }
   }
 
   return (
     <>
-      <PageHeader title="Performance Doctor" subtitle="Latency, warmup, and generation health.">
-        <Button size="sm" variant="secondary" onClick={diagnostics.reload}>
-          <RefreshCw /> Refresh
-        </Button>
-      </PageHeader>
+      {embedded ? (
+        <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h2 className="text-[16px] font-semibold">Performance Doctor</h2>
+            <p className="mt-1 text-[12.5px] text-fg-muted">Ollama warmup, pre-generation, and generation health.</p>
+          </div>
+          <Button size="sm" variant="secondary" onClick={diagnostics.reload}>
+            <RefreshCw /> Refresh
+          </Button>
+        </div>
+      ) : (
+        <PageHeader title="Performance Doctor" subtitle="Ollama warmup, pre-generation, and generation health.">
+          <Button size="sm" variant="secondary" onClick={diagnostics.reload}>
+            <RefreshCw /> Refresh
+          </Button>
+        </PageHeader>
+      )}
 
       <Card className="mb-4 flex flex-wrap items-center gap-2 p-2.5">
         <Activity className="ml-1 h-4 w-4 text-fg-muted" />
-        <Select value={model || undefined} onValueChange={(value) => { setModel(value); setProbe(null); }}>
+        <Select
+          value={model}
+          disabled={probing}
+          onValueChange={(value) => {
+            ++probeGeneration.current;
+            setModel(value);
+            setProbe(null);
+          }}
+        >
           <SelectTrigger className="h-9 min-w-[260px] flex-1">
             <SelectValue placeholder="Select installed model" />
           </SelectTrigger>
@@ -90,13 +123,23 @@ export function Performance() {
         <Button size="sm" onClick={runProbe} disabled={!model || probing}>
           <Play /> {probing ? "Running" : "Run probe"}
         </Button>
-        {model && running.includes(model) ? <Badge variant="success">resident</Badge> : <Badge variant="neutral">not resident</Badge>}
+        {diagnostics.loading && !diagnostics.data ? (
+          <Badge variant="neutral">residency loading</Badge>
+        ) : diagnostics.error || !runningReported ? (
+          <Badge variant="neutral">residency not reported</Badge>
+        ) : model && running.includes(model) ? (
+          <Badge variant="success">resident</Badge>
+        ) : (
+          <Badge variant="neutral">not resident</Badge>
+        )}
       </Card>
 
       {diagnostics.error ? (
         <ErrorState message={`Could not load diagnostics: ${diagnostics.error}`} onRetry={diagnostics.reload} />
       ) : diagnostics.loading ? (
         <PerformanceSkeleton />
+      ) : !installedReported ? (
+        <ErrorState message="Ollama model inventory is unavailable." onRetry={diagnostics.reload} />
       ) : installed.length === 0 ? (
         <EmptyState title="No installed models" hint="Install a model before measuring latency." />
       ) : probe?.state === "failed" ? (
@@ -104,7 +147,7 @@ export function Performance() {
       ) : (
         <>
           <div className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-4">
-            <MetricCard icon={<Clock3 />} label="First token" value={fmtMs(metrics?.time_to_first_token_ms)} />
+            <MetricCard icon={<Clock3 />} label="Pre-generation" value={fmtMs(metrics?.time_to_first_token_ms)} />
             <MetricCard icon={<Zap />} label="Generation" value={fmtTps(metrics?.tokens_per_second)} />
             <MetricCard icon={<Gauge />} label="Load" value={fmtMs(metrics?.load_duration_ms)} />
             <MetricCard icon={<Activity />} label="Prompt prefill" value={fmtMs(metrics?.prompt_eval_duration_ms)} />
@@ -117,7 +160,7 @@ export function Performance() {
                 {diagnosis ? <Badge variant={stateVariant(diagnosis.state)}>{diagnosis.state}</Badge> : null}
                 {probe?.metrics ? <Badge variant="accent">live probe</Badge> : diagnostics.data?.latest ? <Badge variant="neutral">history</Badge> : null}
               </div>
-              <p className="mt-2 text-[13px] text-fg-muted">{diagnosis?.summary ?? "No local measurement yet."}</p>
+              <p className="mt-2 text-[13px] text-fg-muted">{diagnosis?.summary ?? "No Ollama measurement yet."}</p>
               <div className="mt-4 grid grid-cols-1 gap-2 md:grid-cols-2">
                 {(diagnosis?.signals ?? []).map((signal) => (
                   <div key={`${signal.kind}-${signal.label}`} className="rounded border border-line bg-panel-2 p-3">
@@ -153,10 +196,11 @@ export function Performance() {
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full min-w-[620px] text-left text-[12.5px]">
+                  <caption className="sr-only">Saved Pro benchmark history for the selected model</caption>
                   <thead className="border-b border-line text-[10px] uppercase tracking-[0.08em] text-fg-faint">
                     <tr>
                       <th className="pb-2 font-medium">Source</th>
-                      <th className="pb-2 font-medium">First token</th>
+                      <th className="pb-2 font-medium">Pre-generation</th>
                       <th className="pb-2 font-medium">Tokens/sec</th>
                       <th className="pb-2 font-medium">Load</th>
                       <th className="pb-2 font-medium">Total</th>

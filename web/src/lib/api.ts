@@ -333,6 +333,11 @@ export const api = {
 
   ollamaStatus: () => getJSON<import("./types").OllamaStatus>("/api/ollama/status"),
   installed: () => getJSON<import("./types").InstalledModel[]>("/api/ollama/models"),
+  modelProfiles: (models: string[]) =>
+    postJSON<import("./types").OllamaModelProfilesResponse>(
+      "/api/ollama/model-profiles",
+      { models },
+    ),
   ps: () => getJSON<import("./types").PsResponse>("/api/ollama/ps"),
   delete: (model: string) => postJSON<{ success?: boolean; error?: string }>("/api/ollama/delete", { model }),
   /** Preload a model into VRAM (fire-and-forget) so the first chat message isn't slow. */

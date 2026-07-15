@@ -137,9 +137,9 @@ export function Installed() {
                       <Button
                         size="sm"
                         variant="secondary"
-                        onClick={() => navigate(`/chat?model=${encodeURIComponent(m.name)}`)}
+                        onClick={() => navigate(`/studio?model=${encodeURIComponent(m.name)}`)}
                       >
-                        <Play /> Chat
+                        <Play /> Studio
                       </Button>
                       <Button
                         size="sm"
