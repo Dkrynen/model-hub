@@ -206,7 +206,8 @@ class OllamaProvider(LLMProvider):
         """Bake a derived Ollama model that inherits `from_model` with overridden
         parameters (e.g. {"num_ctx": 32768}). Uses the modern /api/create schema.
         Streaming is disabled and the response is consumed so the call blocks until
-        the build finishes."""
+        the build finishes. Timeout must stay non-zero: urllib reads 0 as a
+        non-blocking socket, which fails connect() outright instead of waiting."""
         body = {"model": name, "from": from_model, "parameters": parameters, "stream": False}
-        with self._request("POST", "/api/create", body, timeout=0) as resp:
+        with self._request("POST", "/api/create", body, timeout=600) as resp:
             resp.read()

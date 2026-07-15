@@ -1,3 +1,9 @@
+import json
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+import pytest
+
 from backend.agent_launch.variant import agent_variant_name, ensure_agent_variant
 
 
@@ -59,3 +65,50 @@ def test_ollama_create_posts_correct_body_and_consumes_response(monkeypatch):
     assert captured["body"] == {"model": "qwen3:8b-agent", "from": "qwen3:8b",
                                 "parameters": {"num_ctx": 32768}, "stream": False}
     assert resp.read_called, "create must consume the response so the build completes"
+
+
+class _StubOllamaHandler(BaseHTTPRequestHandler):
+    received: dict = {}
+
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length", 0))
+        _StubOllamaHandler.received = json.loads(self.rfile.read(length).decode())
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(b'{"status":"success"}')
+
+    def log_message(self, *args):
+        pass  # keep pytest output pristine
+
+
+@pytest.fixture
+def stub_ollama():
+    server = HTTPServer(("127.0.0.1", 0), _StubOllamaHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield server
+    server.shutdown()
+    server.server_close()
+
+
+def test_create_completes_over_a_real_socket(stub_ollama):
+    """create() must use a blocking socket.
+
+    A timeout of 0 puts urllib's socket into NON-BLOCKING mode, so connect()
+    fails instantly (BlockingIOError / WinError 10035) instead of waiting.
+    The monkeypatched tests above cannot catch this — they never open a socket.
+    """
+    from backend.provider.ollama import OllamaProvider
+
+    _StubOllamaHandler.received = {}
+    port = stub_ollama.server_address[1]
+    p = OllamaProvider(base_url=f"http://127.0.0.1:{port}")
+
+    p.create("qwen3:8b-agent", "qwen3:8b", {"num_ctx": 32768})
+
+    assert _StubOllamaHandler.received == {
+        "model": "qwen3:8b-agent",
+        "from": "qwen3:8b",
+        "parameters": {"num_ctx": 32768},
+        "stream": False,
+    }
