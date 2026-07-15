@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Routes, Route, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { Toaster } from "sonner";
 import { Sidebar } from "@/components/sidebar";
@@ -15,12 +15,15 @@ import { Performance } from "@/pages/performance";
 import { Docs } from "@/pages/docs";
 import { Settings } from "@/pages/settings";
 import { Pro } from "./pages/pro";
+import { Account } from "./pages/account";
 
 export default function App() {
   const { theme } = useTheme();
   const navigate = useNavigate();
   const location = useLocation();
   const isWorkbench = location.pathname === "/chat";
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const menuButtonRef = useRef<HTMLButtonElement>(null);
 
   // On boot, a relaunch after Pro activation passes `?view=<path>` so the
   // window lands back where it left off instead of the dashboard.
@@ -48,13 +51,21 @@ export default function App() {
 
   return (
     <div className="flex h-screen overflow-hidden">
-      <Sidebar />
+      <Sidebar
+        mobileOpen={mobileNavOpen}
+        onClose={() => setMobileNavOpen(false)}
+        menuButtonRef={menuButtonRef}
+      />
       <div className="flex min-w-0 flex-1 flex-col">
-        <Topbar />
-        <main className="flex-1 overflow-y-auto">
+        <Topbar
+          mobileOpen={mobileNavOpen}
+          onMenu={() => setMobileNavOpen(true)}
+          menuButtonRef={menuButtonRef}
+        />
+        <main className="min-w-0 flex-1 overflow-x-hidden overflow-y-auto">
           <div
             className={cn(
-              "mx-auto w-full px-[var(--app-pad-x)] py-[var(--app-pad-y)]",
+              "mx-auto min-w-0 w-full px-[var(--app-pad-x)] py-[var(--app-pad-y)]",
               isWorkbench ? "max-w-none" : "max-w-[1180px]"
             )}
           >
@@ -67,6 +78,7 @@ export default function App() {
               <Route path="/performance" element={<Performance />} />
               <Route path="/downloads" element={<Downloads />} />
               <Route path="/pro" element={<Pro />} />
+              <Route path="/account" element={<Account />} />
               <Route path="/docs" element={<Docs />} />
               <Route path="/settings" element={<Settings />} />
               <Route path="*" element={<Navigate to="/" replace />} />

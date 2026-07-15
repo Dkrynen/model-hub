@@ -2,15 +2,20 @@
 // in prod Flask serves the built bundle on the same origin.
 
 import { decodeProjectFileDetail, decodeProjectFilesResponse, normalizeProjectFilePath } from "./project-files.ts";
+import { decodeProductState } from "./product-state.ts";
 
 export class ApiError extends Error {
   status: number;
   body: unknown;
 
   constructor(status: number, statusText: string, body: unknown) {
-    const message =
-      body && typeof body === "object" && "error" in body
-        ? String((body as { error?: unknown }).error)
+    const rawError = body && typeof body === "object" && "error" in body
+      ? (body as { error?: unknown }).error
+      : null;
+    const message = typeof rawError === "string"
+      ? rawError
+      : rawError && typeof rawError === "object" && "code" in rawError && typeof rawError.code === "string"
+        ? rawError.code.replace(/_/g, " ")
         : `${status} ${statusText}`;
     super(message);
     this.name = "ApiError";
@@ -265,6 +270,13 @@ export async function* sse(
 }
 
 export const api = {
+  productState: () => getJSON<unknown>("/api/product/state").then(decodeProductState),
+  cloudAuthStart: (provider: "google" | "github") =>
+    postJSON<{ state: "authorizing"; provider: "google" | "github" }>(
+      "/api/cloud/auth/start",
+      { provider },
+    ),
+  cloudLogout: () => postJSON<{ state: "signed_out" }>("/api/cloud/logout", {}),
   scan: () => getJSON<import("./types").ScanInfo>("/api/scan"),
   recommend: (
     params: { vram?: number; use_case?: string; top_k?: number; gpu_mask?: number[]; allow_spill?: boolean } = {}

@@ -121,6 +121,31 @@ def focus_existing_window(title: str = WINDOW_TITLE) -> None:
         pass
 
 
+def forward_oauth_callback(callback_uri: str, host: str = HOST, port: int = PORT) -> bool:
+    """Forward a protocol callback to the running desktop process."""
+    from backend.cloud_session import CloudSessionError, parse_oauth_callback_uri
+
+    try:
+        parse_oauth_callback_uri(callback_uri)
+    except CloudSessionError:
+        return False
+    body = json.dumps({"callback_uri": callback_uri}, separators=(",", ":")).encode("utf-8")
+    request = urllib.request.Request(
+        f"http://{host}:{port}/api/cloud/auth/callback",
+        data=body,
+        headers={"Content-Type": "application/json", "Accept": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            accepted = response.status == 200
+    except Exception:
+        return False
+    if accepted:
+        focus_existing_window()
+    return accepted
+
+
 def launch_desktop(host: str = HOST, port: int = PORT) -> int:
     # Single-instance FIRST: never even start a server if one is running.
     if not acquire_single_instance():

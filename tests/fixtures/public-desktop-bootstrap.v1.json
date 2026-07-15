@@ -1,0 +1,258 @@
+{
+  "schemaVersion": 1,
+  "contract": "lac.public.desktop-bootstrap",
+  "vectors": [
+    {
+      "name": "oauth token response",
+      "parser": "oauth_token_response_v1",
+      "valid": true,
+      "value": {
+        "token_type": "Bearer",
+        "access_token": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "expires_in": 900,
+        "refresh_token": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      }
+    },
+    {
+      "name": "oauth token rejects wrong token type",
+      "parser": "oauth_token_response_v1",
+      "valid": false,
+      "value": {
+        "token_type": "bearer",
+        "access_token": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "expires_in": 900,
+        "refresh_token": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      }
+    },
+    {
+      "name": "oauth token rejects extra field",
+      "parser": "oauth_token_response_v1",
+      "valid": false,
+      "value": {
+        "token_type": "Bearer",
+        "access_token": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "expires_in": 900,
+        "refresh_token": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "scope": "admin"
+      }
+    },
+    {
+      "name": "account response with nullable profile",
+      "parser": "account_response_v1",
+      "valid": true,
+      "value": {
+        "account": {
+          "id": "00000000-0000-4000-8000-000000000001",
+          "primary_email": null,
+          "display_name": null,
+          "avatar_url": null,
+          "status": "active",
+          "created_at": 1784116800
+        }
+      }
+    },
+    {
+      "name": "account response with profile",
+      "parser": "account_response_v1",
+      "valid": true,
+      "value": {
+        "account": {
+          "id": "00000000-0000-4000-8000-000000000002",
+          "primary_email": "duan@example.test",
+          "display_name": "Duan",
+          "avatar_url": "https://example.test/avatar.png",
+          "status": "deleting",
+          "created_at": 1784116801
+        }
+      }
+    },
+    {
+      "name": "account rejects C1 control characters",
+      "parser": "account_response_v1",
+      "valid": false,
+      "value": {
+        "account": {
+          "id": "00000000-0000-4000-8000-000000000004",
+          "primary_email": null,
+          "display_name": "Duan\u0085",
+          "avatar_url": null,
+          "status": "active",
+          "created_at": 1784116803
+        }
+      }
+    },
+    {
+      "name": "account rejects display name over UTF-16 unit limit",
+      "parser": "account_response_v1",
+      "valid": false,
+      "value": {
+        "account": {
+          "id": "00000000-0000-4000-8000-000000000005",
+          "primary_email": null,
+          "display_name": "\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00A",
+          "avatar_url": null,
+          "status": "active",
+          "created_at": 1784116804
+        }
+      }
+    },
+    {
+      "name": "account rejects unknown status",
+      "parser": "account_response_v1",
+      "valid": false,
+      "value": {
+        "account": {
+          "id": "00000000-0000-4000-8000-000000000003",
+          "primary_email": null,
+          "display_name": null,
+          "avatar_url": null,
+          "status": "suspended",
+          "created_at": 1784116802
+        }
+      }
+    },
+    {
+      "name": "entitlements response",
+      "parser": "entitlements_response_v1",
+      "valid": true,
+      "value": {
+        "entitlements": [
+          {
+            "plan": "pro_local",
+            "state": "active",
+            "effective_at": 1784116800,
+            "access_until": null,
+            "export_until": null,
+            "updated_at": 1784116800
+          },
+          {
+            "plan": "pro_cloud",
+            "state": "trialing",
+            "effective_at": 1784116800,
+            "access_until": 1786708800,
+            "export_until": 1789300800,
+            "updated_at": 1784116801
+          }
+        ]
+      }
+    },
+    {
+      "name": "entitlements reject duplicate plan",
+      "parser": "entitlements_response_v1",
+      "valid": false,
+      "value": {
+        "entitlements": [
+          {
+            "plan": "pro_local",
+            "state": "active",
+            "effective_at": 1784116800,
+            "access_until": null,
+            "export_until": null,
+            "updated_at": 1784116800
+          },
+          {
+            "plan": "pro_local",
+            "state": "revoked",
+            "effective_at": 1784116800,
+            "access_until": null,
+            "export_until": 1786708800,
+            "updated_at": 1784116801
+          }
+        ]
+      }
+    },
+    {
+      "name": "usage response",
+      "parser": "usage_response_v1",
+      "valid": true,
+      "value": {
+        "monthlyCredits": 125,
+        "weeklyCredits": 75,
+        "shortWindowCredits": 25,
+        "activeJobs": 1,
+        "queuedJobs": 2,
+        "resetAt": {
+          "monthly": 1786795200000,
+          "weekly": 1784721600000,
+          "five_hour": 1784134800000
+        }
+      }
+    },
+    {
+      "name": "usage rejects camel case reset key",
+      "parser": "usage_response_v1",
+      "valid": false,
+      "value": {
+        "monthlyCredits": 125,
+        "weeklyCredits": 75,
+        "shortWindowCredits": 25,
+        "activeJobs": 1,
+        "queuedJobs": 2,
+        "resetAt": {
+          "monthly": 1786795200000,
+          "weekly": 1784721600000,
+          "fiveHour": 1784134800000
+        }
+      }
+    },
+    {
+      "name": "usage rejects negative credits",
+      "parser": "usage_response_v1",
+      "valid": false,
+      "value": {
+        "monthlyCredits": -1,
+        "weeklyCredits": 0,
+        "shortWindowCredits": 0,
+        "activeJobs": 0,
+        "queuedJobs": 0,
+        "resetAt": {
+          "monthly": 1786795200000,
+          "weekly": 1784721600000,
+          "five_hour": 1784134800000
+        }
+      }
+    },
+    {
+      "name": "stable failure without detail",
+      "parser": "stable_failure_response_v1",
+      "valid": true,
+      "value": {
+        "error": {
+          "code": "auth_required"
+        }
+      }
+    },
+    {
+      "name": "stable failure with detail",
+      "parser": "stable_failure_response_v1",
+      "valid": true,
+      "value": {
+        "error": {
+          "code": "provider_unavailable",
+          "detail": "Authoritative usage service is unavailable"
+        }
+      }
+    },
+    {
+      "name": "stable failure rejects unstable code",
+      "parser": "stable_failure_response_v1",
+      "valid": false,
+      "value": {
+        "error": {
+          "code": "internal_error"
+        }
+      }
+    },
+    {
+      "name": "stable failure rejects extra field",
+      "parser": "stable_failure_response_v1",
+      "valid": false,
+      "value": {
+        "error": {
+          "code": "quota_exhausted",
+          "retry": true
+        }
+      }
+    }
+  ]
+}

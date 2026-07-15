@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useState, type RefObject } from "react";
 import { useNavigate } from "react-router-dom";
-import { Search, Sun, Moon, Activity } from "lucide-react";
+import { Search, Sun, Moon, Activity, Menu } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { useTheme } from "@/components/theme";
@@ -8,7 +8,17 @@ import { useAsync, useInterval } from "@/lib/hooks";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
-export function Topbar() {
+type TopbarProps = {
+  mobileOpen?: boolean;
+  onMenu?: () => void;
+  menuButtonRef?: RefObject<HTMLButtonElement>;
+};
+
+export function Topbar({
+  mobileOpen = false,
+  onMenu = () => undefined,
+  menuButtonRef,
+}: TopbarProps) {
   const navigate = useNavigate();
   const { theme, toggle } = useTheme();
   const [q, setQ] = useState("");
@@ -19,9 +29,22 @@ export function Topbar() {
   const online = status.data?.running;
 
   return (
-    <header className="glass sticky top-0 z-30 flex h-[var(--topbar-h)] items-center gap-3 border-b border-line px-5">
+    <header className="glass sticky top-0 z-30 flex h-[var(--topbar-h)] min-w-0 items-center gap-2 border-b border-line px-3 sm:gap-3 sm:px-5">
+      <Button
+        ref={menuButtonRef}
+        variant="ghost"
+        size="icon"
+        className="shrink-0 md:hidden"
+        onClick={onMenu}
+        aria-label="Open navigation"
+        aria-controls="primary-navigation"
+        aria-expanded={mobileOpen}
+        title="Open navigation"
+      >
+        <Menu />
+      </Button>
       <form
-        className="relative max-w-md flex-1"
+        className="relative min-w-0 max-w-md flex-1"
         onSubmit={(e) => {
           e.preventDefault();
           navigate(`/browse${q.trim() ? `?q=${encodeURIComponent(q.trim())}` : ""}`);
@@ -39,11 +62,11 @@ export function Topbar() {
         </kbd>
       </form>
 
-      <div className="ml-auto flex items-center gap-2">
+      <div className="ml-auto flex shrink-0 items-center gap-2">
         {online ? (
           <div
             className={cn(
-              "inline-flex items-center gap-1.5 rounded-pill border px-2.5 py-1 text-[12px] font-medium",
+              "hidden items-center gap-1.5 rounded-pill border px-2.5 py-1 text-[12px] font-medium sm:inline-flex",
               "border-line bg-panel-2 text-fg-muted"
             )}
             title={`Ollama ${status.data?.version ?? ""}`}
@@ -58,7 +81,7 @@ export function Topbar() {
             target="_blank"
             rel="noreferrer"
             className={cn(
-              "inline-flex items-center gap-1.5 rounded-pill border px-2.5 py-1 text-[12px] font-medium",
+              "hidden items-center gap-1.5 rounded-pill border px-2.5 py-1 text-[12px] font-medium sm:inline-flex",
               "border-warning/30 bg-warning-soft text-warning"
             )}
             title="Ollama offline — click to install"

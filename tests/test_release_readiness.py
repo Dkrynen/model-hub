@@ -21,7 +21,7 @@ def test_build_workflow_verifies_source_version_and_uploads_checksum():
     assert "-replace '#define MyAppVersion" not in text
     assert "scripts/verify_release_version.py --expected $tag" in text
     assert "SHA256SUMS.txt" in text
-    assert "release/SHA256SUMS.txt" in text
+    assert "dist/SHA256SUMS.txt" in text
 
 
 def test_sha256_file_reports_uppercase_digest(tmp_path):

@@ -446,7 +446,7 @@ def test_discover_finds_plugin_installed_by_unlock(plugin_dir, guarded_sys_path)
     names = [p.name for p in found]
     assert "dummy" in names                      # dist-info discovered via entry_points
     dummy = next(p for p in found if p.name == "dummy")
-    assert dummy.ok                              # types:SimpleNamespace loads fine
+    assert dummy.ok                               # generic community plugin remains compatible
     assert sys.path[0] == str(plugin_dir)        # prepended, not appended
 
 

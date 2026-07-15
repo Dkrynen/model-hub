@@ -5,10 +5,24 @@ import backend.plugins as plugins_mod
 from backend.plugins import LoadedPlugin
 
 
+PRODUCT_STATE = {
+    "schema_version": 1,
+    "product": "local_pro",
+    "entitlement": {"state": "inactive", "plan": None, "expires_human": None, "checked": None},
+    "capabilities": [],
+}
+
+
+def loaded(name, version, obj):
+    obj.host_api_version = 1
+    obj.product_state = lambda: PRODUCT_STATE
+    return LoadedPlugin(name, version, obj, host_api_version=1, product_state=PRODUCT_STATE)
+
+
 def test_api_plugins_endpoint_lists(monkeypatch, flask_app):
     plug = SimpleNamespace(name="fake", version="9.9")
     monkeypatch.setattr(plugins_mod, "discover", lambda: [
-        LoadedPlugin("fake", "9.9", plug),
+        loaded("fake", "9.9", plug),
         LoadedPlugin("broken", "?", None, error="nope"),
     ])
     client = flask_app.test_client()
@@ -26,7 +40,7 @@ def test_register_api_mounts_routes(monkeypatch, flask_app):
             return {"pong": True}
 
     plug = SimpleNamespace(name="fake", version="9.9", register_api=register_api)
-    monkeypatch.setattr(plugins_mod, "discover", lambda: [LoadedPlugin("fake", "9.9", plug)])
+    monkeypatch.setattr(plugins_mod, "discover", lambda: [loaded("fake", "9.9", plug)])
 
     # flask_app is a shared module-level app; a prior test in this session may
     # have already dispatched a request against it, which locks route
@@ -45,15 +59,34 @@ def test_broken_register_api_is_isolated(monkeypatch, flask_app):
         raise RuntimeError("boom")
 
     plug = SimpleNamespace(name="bad", version="0.0", register_api=register_api)
-    monkeypatch.setattr(plugins_mod, "discover", lambda: [LoadedPlugin("bad", "0.0", plug)])
+    monkeypatch.setattr(plugins_mod, "discover", lambda: [loaded("bad", "0.0", plug)])
     from backend.api import _mount_plugins
     _mount_plugins(flask_app)  # must not raise
+
+
+def test_incompatible_plugin_is_quarantined_before_route_registration(monkeypatch, flask_app):
+    calls = []
+    plug = SimpleNamespace(register_api=lambda _app: calls.append("mounted"))
+    monkeypatch.setattr(plugins_mod, "discover", lambda: [
+        LoadedPlugin(
+            "old-pro",
+            "0.9.0",
+            plug,
+            host_api_version=0,
+            compatibility_error="host_api_version_mismatch",
+        )
+    ])
+    from backend.api import _mount_plugins
+
+    _mount_plugins(flask_app)
+
+    assert calls == []
 
 
 def test_notify_model_installed_calls_hook(monkeypatch):
     calls = []
     plug = SimpleNamespace(name="fake", version="1.0", on_model_installed=lambda m: calls.append(m))
-    monkeypatch.setattr(plugins_mod, "discover", lambda: [LoadedPlugin("fake", "1.0", plug)])
+    monkeypatch.setattr(plugins_mod, "discover", lambda: [loaded("fake", "1.0", plug)])
 
     from backend.api import _notify_model_installed
     _notify_model_installed("m:1b")
@@ -65,7 +98,7 @@ def test_notify_model_installed_isolates_raising_hook(monkeypatch, capsys):
         raise RuntimeError("boom")
 
     plug = SimpleNamespace(name="bad", version="0.0", on_model_installed=boom)
-    monkeypatch.setattr(plugins_mod, "discover", lambda: [LoadedPlugin("bad", "0.0", plug)])
+    monkeypatch.setattr(plugins_mod, "discover", lambda: [loaded("bad", "0.0", plug)])
 
     from backend.api import _notify_model_installed
     _notify_model_installed("m:1b")  # must not raise
@@ -82,7 +115,7 @@ def test_notify_model_installed_async_runs_in_background_thread(monkeypatch):
         done.set()
 
     plug = SimpleNamespace(name="fake", version="1.0", on_model_installed=hook)
-    monkeypatch.setattr(plugins_mod, "discover", lambda: [LoadedPlugin("fake", "1.0", plug)])
+    monkeypatch.setattr(plugins_mod, "discover", lambda: [loaded("fake", "1.0", plug)])
 
     from backend.api import _notify_model_installed_async
     _notify_model_installed_async("m:1b")

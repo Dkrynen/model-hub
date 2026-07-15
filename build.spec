@@ -78,6 +78,7 @@ a = Analysis(
         "flask",
         "json", "os", "platform", "subprocess",
         "threading", "time", "webbrowser", "urllib",
+        "win32crypt",  # Windows DPAPI storage for the Cloud refresh credential
         "shutil", "pathlib", "dataclasses", "re", "typing",
         *crypto_hidden,  # cryptography submodules + native _rust (see collect_all above)
         *webview_hidden,

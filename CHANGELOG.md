@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- **One LAC product spine** - Added a versioned Local/Local Pro/Cloud state contract and one desktop Account surface while keeping local execution the default and the private Pro plugin behind the generic entry-point boundary.
+- **Fail-closed desktop Cloud account bridge** - Added Google/GitHub PKCE startup, strict `lac://oauth/callback` handling, Windows DPAPI refresh-token storage, bounded public response decoders, refresh rotation, and explicit usage-reset presentation. The production Cloud origin and hosted execution remain disabled pending launch evidence.
 - **Launch-gate release scopes** - `enterprise_launch_gate.py` now takes `--release-scope {local,cloud}` (default `cloud`). The `local` scope gates the signed installer release on 5 evidence gates plus the repository and installer lanes and passes with zero cloud evidence; the `cloud` scope keeps all 19 gates fail-closed. Evidence manifests are schema v3 and scope-bound (signatures cover the scope).
 - **2.7.0 release candidate** - Staged the two-tier Local Pro/Pro Cloud contracts, mandatory artifact integrity, hardened delivery gate, enterprise CI gates, and fail-closed Authenticode release workflow. This remains unreleased until the IP, signing, paid-platform, audit, beta, and external-review gates pass.
 - **Import preflight smoke** - Added a cheap `live_import_stress.py --preflight-only` mode and wired it into the public-readiness live lane so GGUF preflight, Pro resolver, and HF token route shape are checked before any slow import.

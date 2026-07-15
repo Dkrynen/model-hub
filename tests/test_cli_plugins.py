@@ -5,6 +5,18 @@ import backend.plugins as plugins_mod
 from backend.plugins import LoadedPlugin
 
 
+PRODUCT_STATE = {
+    "schema_version": 1,
+    "product": "local_pro",
+    "entitlement": {"state": "inactive", "plan": None, "expires_human": None, "checked": None},
+    "capabilities": [],
+}
+
+
+def loaded(name, version, obj):
+    return LoadedPlugin(name, version, obj, host_api_version=1, product_state=PRODUCT_STATE)
+
+
 def _fake_discover(monkeypatch, plugins):
     monkeypatch.setattr(plugins_mod, "discover", lambda: plugins)
 
@@ -17,7 +29,7 @@ def test_plugin_subcommand_is_mounted(monkeypatch):
         p.set_defaults(func=lambda args: calls.setdefault("ran", True))
 
     plug = SimpleNamespace(name="fake", version="9.9", register_cli=register_cli)
-    _fake_discover(monkeypatch, [LoadedPlugin("fake", "9.9", plug)])
+    _fake_discover(monkeypatch, [loaded("fake", "9.9", plug)])
 
     import cli
     parser = cli.build_parser()
@@ -31,7 +43,7 @@ def test_broken_register_cli_does_not_crash(monkeypatch):
         raise RuntimeError("plugin exploded")
 
     plug = SimpleNamespace(name="bad", version="0.0", register_cli=register_cli)
-    _fake_discover(monkeypatch, [LoadedPlugin("bad", "0.0", plug)])
+    _fake_discover(monkeypatch, [loaded("bad", "0.0", plug)])
 
     import cli
     parser = cli.build_parser()  # must not raise
@@ -42,7 +54,7 @@ def test_broken_register_cli_does_not_crash(monkeypatch):
 def test_cmd_plugins_lists(monkeypatch, capsys):
     plug = SimpleNamespace(name="fake", version="9.9")
     _fake_discover(monkeypatch, [
-        LoadedPlugin("fake", "9.9", plug),
+        loaded("fake", "9.9", plug),
         LoadedPlugin("broken", "?", None, error="ImportError: nope"),
     ])
     import cli
@@ -70,7 +82,7 @@ def test_discover_failure_does_not_kill_cli(monkeypatch, capsys):
 def test_notify_model_installed_calls_hook(monkeypatch):
     calls = []
     plug = SimpleNamespace(name="fake", version="1.0", on_model_installed=lambda m: calls.append(m))
-    _fake_discover(monkeypatch, [LoadedPlugin("fake", "1.0", plug)])
+    _fake_discover(monkeypatch, [loaded("fake", "1.0", plug)])
 
     import cli
     cli._notify_model_installed("llama3.2:3b")
@@ -82,7 +94,7 @@ def test_notify_model_installed_isolates_raising_hook(monkeypatch, capsys):
         raise RuntimeError("sweep exploded")
 
     plug = SimpleNamespace(name="bad", version="0.0", on_model_installed=boom)
-    _fake_discover(monkeypatch, [LoadedPlugin("bad", "0.0", plug)])
+    _fake_discover(monkeypatch, [loaded("bad", "0.0", plug)])
 
     import cli
     cli._notify_model_installed("m:1b")  # must not raise
@@ -91,7 +103,7 @@ def test_notify_model_installed_isolates_raising_hook(monkeypatch, capsys):
 
 def test_notify_model_installed_skips_plugin_without_hook(monkeypatch):
     plug = SimpleNamespace(name="fake", version="1.0")  # no on_model_installed attr
-    _fake_discover(monkeypatch, [LoadedPlugin("fake", "1.0", plug)])
+    _fake_discover(monkeypatch, [loaded("fake", "1.0", plug)])
 
     import cli
     cli._notify_model_installed("m:1b")  # must not raise

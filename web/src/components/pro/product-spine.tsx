@@ -92,7 +92,7 @@ export function ProductSpine({
   const planLabel = licensed ? planPresentation.label : "Local Pro - $36/year";
   const planDetail =
     licensed && planPresentation.kind === "cloud"
-      ? "Pro Cloud is planned at $20/month and includes Local Pro."
+      ? "This local receipt includes Local Pro; Cloud account authority remains separate."
       : licensed && planPresentation.kind === "development"
         ? "Development override is active for this source build."
         : licensed && planPresentation.kind === "unknown"
@@ -114,9 +114,9 @@ export function ProductSpine({
             <p className="mt-2 text-[13px] leading-relaxed text-fg-muted">
               Pro is the monetized layer for people who want LAC to do work: measured speed,
               private model supply, tuning automation, and a coding cockpit for stronger local models.
-              Pro Cloud is the planned $20/month higher tier. It includes everything in Local Pro,
-              plus encrypted sync and capped hosted agents, and is not yet available. Every paid
-              checkout will start from a Google or GitHub LAC account.
+              Pro Cloud is the planned $20/month higher tier. Account connectivity now lives in the
+              same LAC desktop shell; checkout and hosted execution remain gated until the service
+              and operational evidence are approved.
             </p>
           </div>
           {!licensed && (

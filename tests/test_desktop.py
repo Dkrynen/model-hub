@@ -50,3 +50,32 @@ def test_should_use_window_defaults_to_frozen(monkeypatch):
     monkeypatch.setattr(server.sys, "frozen", False, raising=False)
     assert server._should_use_window(ns()) is False
     assert server._should_use_window(ns(window=True)) is True
+
+
+def test_forward_oauth_callback_posts_only_to_fixed_loopback_endpoint(monkeypatch):
+    captured = {}
+
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    def open_request(request, timeout):
+        captured["url"] = request.full_url
+        captured["body"] = request.data
+        captured["timeout"] = timeout
+        return Response()
+
+    monkeypatch.setattr(desktop.urllib.request, "urlopen", open_request)
+    monkeypatch.setattr(desktop, "focus_existing_window", lambda: captured.setdefault("focused", True))
+    callback = "lac://oauth/callback?code=" + "c" * 43
+
+    assert desktop.forward_oauth_callback(callback) is True
+    assert captured["url"] == "http://127.0.0.1:5050/api/cloud/auth/callback"
+    assert callback.encode() in captured["body"]
+    assert captured["timeout"] == 20
+    assert captured["focused"] is True

@@ -5,34 +5,48 @@ export function useAsync<T>(fn: () => Promise<T>, deps: unknown[] = []) {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [tick, setTick] = useState(0);
   const fnRef = useRef(fn);
+  const requestIdRef = useRef(0);
+  const inFlightRef = useRef<{ id: number; promise: Promise<void> } | null>(null);
   fnRef.current = fn;
 
-  const reload = useCallback(() => setTick((t) => t + 1), []);
+  const execute = useCallback((force = false): Promise<void> => {
+    if (!force && inFlightRef.current) return inFlightRef.current.promise;
 
-  useEffect(() => {
-    let alive = true;
+    const requestId = ++requestIdRef.current;
     setLoading(true);
-    fnRef
-      .current()
-      .then((d) => {
-        if (alive) {
-          setData(d);
+
+    const promise = (async () => {
+      try {
+        const next = await fnRef.current();
+        if (requestIdRef.current === requestId) {
+          setData(next);
           setError(null);
         }
-      })
-      .catch((e) => {
-        if (alive) setError(e?.message ?? String(e));
-      })
-      .finally(() => {
-        if (alive) setLoading(false);
-      });
+      } catch (cause) {
+        if (requestIdRef.current === requestId) {
+          setError(cause instanceof Error ? cause.message : String(cause));
+        }
+      } finally {
+        if (requestIdRef.current === requestId) setLoading(false);
+        if (inFlightRef.current?.id === requestId) inFlightRef.current = null;
+      }
+    })();
+
+    inFlightRef.current = { id: requestId, promise };
+    return promise;
+  }, []);
+
+  const reload = useCallback((): Promise<void> => execute(), [execute]);
+
+  useEffect(() => {
+    void execute(true);
     return () => {
-      alive = false;
+      requestIdRef.current += 1;
+      inFlightRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [...deps, tick]);
+  }, [...deps]);
 
   return { data, error, loading, reload };
 }

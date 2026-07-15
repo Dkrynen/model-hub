@@ -1068,7 +1068,8 @@ def cmd_plugins(args):
         return
     rows = []
     for p in found:
-        status = "ok" if p.ok else f"error: {p.error}"
+        issue = p.error or p.compatibility_error or "unavailable"
+        status = "ok" if p.ok else f"{p.state}: {issue}"
         rows.append([p.name, p.version, status])
     print_table(["Name", "Version", "Status"], rows)
 

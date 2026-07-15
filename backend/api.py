@@ -32,6 +32,8 @@ from .cookbook.config import load_config
 from .cookbook.downloads import download_history
 from .cookbook.hardware import detect, print_system
 from .cookbook.recommend import recommend, load_models
+from .cloud_session import CloudSession, CloudSessionError
+from .cloud_tokens import SecureTokenStoreError
 from .plugin.builtins.tools import TOOL_HANDLERS, TOOL_SCHEMAS
 from .permission import PermissionEngine
 from .pro_install import install_pro_plugin
@@ -51,6 +53,7 @@ _DIST = Path(__file__).resolve().parent.parent / "web" / "dist"
 _FRONTEND = Path(__file__).resolve().parent.parent / "frontend"
 _STATIC = str(_DIST) if (_DIST / "index.html").exists() else str(_FRONTEND)
 app = Flask(__name__, static_folder=_STATIC, static_url_path="", template_folder=_STATIC)
+_cloud_session = CloudSession()
 
 _TRUSTED_BROWSER_HOSTNAMES = {
     "localhost",
@@ -3289,7 +3292,14 @@ def _debug_bundle_payload() -> dict:
             "model_install_mode": "on_demand_ollama_pull",
         },
         "plugins": [
-            {"name": p.name, "version": p.version, "ok": p.ok, "error": p.error}
+            {
+                "name": p.name,
+                "version": p.version,
+                "ok": p.ok,
+                "state": p.state,
+                "host_api_version": p.host_api_version,
+                "error": p.error or p.compatibility_error,
+            }
             for p in _discover_plugins_safe()
         ],
         "recent_downloads": downloads,
@@ -4709,6 +4719,94 @@ def _discover_plugins_safe():
         return []
 
 
+def _local_pro_product_state(loaded_plugins) -> dict:
+    candidates = [
+        plugin for plugin in loaded_plugins
+        if plugin.product_id == "local_pro" or plugin.name == "pro"
+    ]
+    if not candidates:
+        return {"state": "absent"}
+    if len(candidates) != 1:
+        return {
+            "state": "incompatible",
+            "plugin_version": "multiple",
+            "host_api_version": None,
+        }
+    plugin = candidates[0]
+    if plugin.state != "ready" or plugin.product_state is None:
+        return {
+            "state": plugin.state,
+            "plugin_version": plugin.version,
+            "host_api_version": plugin.host_api_version,
+        }
+    return {
+        "state": "ready",
+        "plugin_version": plugin.version,
+        "host_api_version": plugin.host_api_version,
+        **plugin.product_state,
+    }
+
+
+def _cloud_error_response(exc: CloudSessionError | SecureTokenStoreError, status=400):
+    code = exc.code
+    if isinstance(exc, SecureTokenStoreError) and code not in {
+        "corrupt_store", "secure_storage_unavailable"
+    }:
+        code = "secure_storage_unavailable"
+    response = jsonify({"error": {"code": code}})
+    response.headers["Cache-Control"] = "no-store"
+    return response, status
+
+
+@app.route("/api/product/state")
+def api_product_state():
+    loaded = _discover_plugins_safe()
+    response = jsonify({
+        "schema_version": 1,
+        "execution_default": "local",
+        "local": {"state": "ready"},
+        "local_pro": _local_pro_product_state(loaded),
+        "cloud": _cloud_session.product_state(refresh=True),
+    })
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@app.route("/api/cloud/auth/start", methods=["POST"])
+def api_cloud_auth_start():
+    if request.content_length is not None and request.content_length > 1024:
+        return jsonify({"error": {"code": "invalid_request"}}), 400
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or set(data) != {"provider"}:
+        return jsonify({"error": {"code": "invalid_request"}}), 400
+    try:
+        result = _cloud_session.start_authorization(data["provider"])
+    except (CloudSessionError, SecureTokenStoreError) as exc:
+        return _cloud_error_response(exc)
+    return jsonify({key: value for key, value in result.items() if key != "authorization_url"})
+
+
+@app.route("/api/cloud/auth/callback", methods=["POST"])
+def api_cloud_auth_callback():
+    if request.content_length is not None and request.content_length > 4096:
+        return jsonify({"error": {"code": "invalid_request"}}), 400
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or set(data) != {"callback_uri"}:
+        return jsonify({"error": {"code": "invalid_request"}}), 400
+    try:
+        return jsonify(_cloud_session.complete_authorization(data["callback_uri"]))
+    except (CloudSessionError, SecureTokenStoreError) as exc:
+        return _cloud_error_response(exc)
+
+
+@app.route("/api/cloud/logout", methods=["POST"])
+def api_cloud_logout():
+    try:
+        return jsonify(_cloud_session.logout())
+    except (CloudSessionError, SecureTokenStoreError) as exc:
+        return _cloud_error_response(exc)
+
+
 def _notify_model_installed(model_name: str) -> None:
     """Call every plugin's on_model_installed(model_name), isolated per-plugin
     (mirrors _mount_plugins()'s isolation). A missing hook, a plugin that
@@ -4734,7 +4832,14 @@ def _notify_model_installed_async(model_name: str) -> None:
 @app.route("/api/plugins")
 def api_plugins():
     return jsonify([
-        {"name": p.name, "version": p.version, "ok": p.ok, "error": p.error}
+        {
+            "name": p.name,
+            "version": p.version,
+            "ok": p.ok,
+            "state": p.state,
+            "host_api_version": p.host_api_version,
+            "error": p.error or p.compatibility_error,
+        }
         for p in _discover_plugins_safe()
     ])
 

@@ -66,7 +66,7 @@ test("in-app and public copy separate Local Pro from unavailable Pro Cloud", () 
 
 test("licensed Cloud status does not display the Local Pro price detail", () => {
   assert.match(productSource, /planPresentation\.kind === "cloud"/);
-  assert.match(productSource, /Pro Cloud is planned at \$20\/month/);
+  assert.match(productSource, /Cloud account authority remains separate/);
   assert.match(productSource, /detail=\{planDetail\}/);
 });
 

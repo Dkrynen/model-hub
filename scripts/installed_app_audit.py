@@ -25,6 +25,7 @@ PAGE_ROUTES = [
     ("/performance", "Performance Doctor"),
     ("/downloads", "Downloads"),
     ("/pro", "LAC Pro"),
+    ("/account", "Account"),
     ("/docs", "Docs"),
     ("/settings", "Settings"),
 ]
@@ -138,6 +139,7 @@ def check_api(args: argparse.Namespace) -> list[dict[str, Any]]:
     checks: list[tuple[str, str, str, Any | None, int | None, str | None]] = [
         ("version", "GET", "/api/system/version", None, 200, "version"),
         ("plugins", "GET", "/api/plugins", None, 200, None),
+        ("product_state", "GET", "/api/product/state", None, 200, "schema_version"),
         ("ollama_status", "GET", "/api/ollama/status", None, 200, "running"),
         ("installed_models", "GET", "/api/ollama/models", None, 200, None),
         ("running_models", "GET", "/api/ollama/ps", None, 200, "running"),

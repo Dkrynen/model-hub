@@ -148,13 +148,21 @@ def _should_use_window(args) -> bool:
 def _is_cli_invocation(argv: list[str]) -> bool:
     """The exe is being used as a CLI when the first token is a subcommand
     (a bare word), not a server flag (--host/--window/...) and not empty."""
-    return bool(argv) and not argv[0].startswith("-")
+    return bool(argv) and not argv[0].startswith("-") and not argv[0].lower().startswith("lac://")
 
 
 def main():
     import argparse
 
-    if _is_cli_invocation(sys.argv[1:]):
+    raw_args = sys.argv[1:]
+    if len(raw_args) == 1 and raw_args[0].lower().startswith("lac://"):
+        from backend.cloud_session import is_oauth_callback_uri
+        from backend import desktop
+
+        accepted = is_oauth_callback_uri(raw_args[0]) and desktop.forward_oauth_callback(raw_args[0])
+        sys.exit(0 if accepted else 1)
+
+    if _is_cli_invocation(raw_args):
         import cli  # bundled into the exe so `lac.exe pro activate` / `lac.exe scan` work
         sys.exit(cli.main())
 
