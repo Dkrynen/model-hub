@@ -42,6 +42,8 @@ Source: "dist\lac\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs i
 Source: "LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "CHANGELOG.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "README.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "SECURITY.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "PRIVACY.md"; DestDir: "{app}"; Flags: ignoreversion
 
 [InstallDelete]
 ; Vite hashes web assets, so remove stale bundles before copying the fresh UI.

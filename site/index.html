@@ -112,10 +112,10 @@
          into real, measured data points after activation.</p>
     </div>
     <div class="card">
-      <div class="k">Chat</div>
-      <h3>Built-in chat &amp; web UI</h3>
-      <p>Full chat interface, web dashboard on <code>:5050</code>, and a terminal TUI.
-         However you like to work, LAC has a face for it.</p>
+      <div class="k">Studio + Lab</div>
+      <h3>A model workbench, local by default</h3>
+      <p>Work with configured providers in Studio (local Ollama by default), compare exact model
+         identities from the configured Ollama endpoint in Lab, and run one reproducible diagnostic protocol.</p>
     </div>
   </div>
 </div>
@@ -136,7 +136,7 @@
       <p><span class="price">Local Pro - $36/year</span> (the equivalent of $3/month). Checkout is <strong>not open yet</strong>.</p>
       <p><span class="price">Pro Cloud - planned at $20/month</span> is the higher tier. It includes everything in Local Pro, plus end-to-end encrypted sync and capped hosted agents. Encrypted sync is designed so LAC cannot read the ciphertext. Hosted processing is separate: only selected job inputs are decrypted for execution and may be sent to approved model providers. It is <strong>not yet available</strong>; no checkout or hosted usage is live.</p>
       <a class="btn btn-primary" href="https://tally.so/r/GxyBx2" target="_blank" rel="noopener" style="margin-top: 8px;">Join the Pro waitlist</a>
-      <p class="hint">At launch, every paid buyer first signs in with Google or GitHub and starts checkout from that LAC account. Access follows the signed Polar webhook, not the redirect. Polar then provides the Local Pro license key. Activate it with <code>lac unlock &lt;key&gt;</code> (or <strong>Settings &rarr; Activate Pro</strong>), then restart LAC. The activated runtime stays local and key-based. Free installs ship no Pro code.</p>
+      <p class="hint">At launch, every paid buyer first signs in with Google or GitHub and starts checkout from that LAC account. Access follows the signed Polar webhook, not the redirect. Polar then provides the Local Pro license key. Activate it with <code>lac unlock &lt;key&gt;</code> (or <strong>Settings &rarr; Activate Pro</strong>), then restart LAC. Model execution and tuning use the configured Ollama endpoint (local by default); periodic entitlement validation contacts the configured activation service. Free installs ship no Pro code.</p>
     </div>
   </div>
 </section>
@@ -168,7 +168,7 @@
       </div>
       <div class="card">
         <h3>Will my data leave my machine?</h3>
-        <p>Your chats and model execution stay local. LAC contacts named external services only for things you ask it to do, such as downloads, update checks, or Pro activation.</p>
+        <p>LAC has no telemetry. Model requests go to your configured providers; Ollama defaults to this machine, but providers and endpoints may be remote. LAC may check GitHub Releases for updates and automatically refresh stale public model metadata from Ollama.com. Explore web search, configured MCP tools, model imports, and Pro activation create additional documented boundaries. See the Privacy policy for the exact data involved.</p>
       </div>
       <div class="card">
         <h3>What GPUs are supported?</h3>
@@ -189,6 +189,8 @@
 <footer class="wrap">
   LAC · <a href="https://github.com/Dkrynen/lac">GitHub</a> ·
   <a href="https://github.com/Dkrynen/lac/blob/master/LICENSE">MIT (core)</a> ·
+  <a href="https://github.com/Dkrynen/lac/blob/master/SECURITY.md">Security</a> &middot;
+  <a href="https://github.com/Dkrynen/lac/blob/master/PRIVACY.md">Privacy</a> &middot;
   built by <a href="https://github.com/Dkrynen">Duan Krynen</a>
 </footer>
 

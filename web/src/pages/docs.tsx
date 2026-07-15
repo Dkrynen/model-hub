@@ -43,7 +43,7 @@ export function Docs() {
         subtitle="API reference and a quick guide to running LAC from the terminal."
       >
         <a
-          href="https://github.com/Dkrynen/model-hub"
+          href="https://github.com/Dkrynen/lac"
           target="_blank"
           rel="noreferrer"
           className="inline-flex items-center gap-1.5 text-[13px] text-fg-muted hover:text-fg"

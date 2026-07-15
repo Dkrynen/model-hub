@@ -508,6 +508,13 @@ def test_cloud_product_readiness_fails_closed_on_incomplete_or_ambiguous_output(
             "valid": True,
             "localEngineeringReady": False,
             "status": "platform_foundation_complete",
+            "missingCapabilities": ["provider_metering", "provider_broker"],
+        }), ""),
+        subprocess.CompletedProcess(["node"], 1, json.dumps({
+            "schemaVersion": 1,
+            "valid": False,
+            "localEngineeringReady": False,
+            "status": "invalid",
             "missingCapabilities": ["provider_broker"],
         }), ""),
         subprocess.CompletedProcess(["node"], 0, json.dumps({
@@ -518,12 +525,40 @@ def test_cloud_product_readiness_fails_closed_on_incomplete_or_ambiguous_output(
             "missingCapabilities": [],
             "unexpected": True,
         }), ""),
+        subprocess.CompletedProcess(["node"], 1, json.dumps({
+            "schemaVersion": True,
+            "valid": False,
+            "localEngineeringReady": False,
+            "status": "invalid",
+            "missingCapabilities": ["provider_broker"],
+        }), ""),
         subprocess.CompletedProcess(["node"], 0, "not-json", ""),
     ]
 
+    details = []
+    data = []
     for result in reports:
         monkeypatch.setattr(gate, "_run", lambda args, cwd=None, result=result: result)
-        assert gate.check_cloud_product_readiness(cloud)["ok"] is False
+        row = gate.check_cloud_product_readiness(cloud)
+        assert row["ok"] is False
+        details.append(row["detail"])
+        data.append(row["data"])
+
+    assert details[:2] == [
+        "missing hosted-agent capabilities: provider_metering, provider_broker",
+        "missing or unverified hosted-agent capabilities: provider_broker",
+    ]
+    assert details[2:] == [
+        "hosted-agent product capabilities remain incomplete or unverified",
+        "hosted-agent product capabilities remain incomplete or unverified",
+        "hosted-agent product capabilities remain incomplete or unverified",
+    ]
+    assert data[0] == {
+        "diagnostic_validated": True,
+        "missing_capabilities": ["provider_metering", "provider_broker"],
+    }
+    assert data[2] == {"diagnostic_validated": False, "missing_capabilities": []}
+    assert data[3] == {"diagnostic_validated": False, "missing_capabilities": []}
 
 
 def test_repository_checks_report_dirty_unsigned_and_remote_policy(tmp_path):
@@ -543,6 +578,40 @@ def test_repository_checks_report_dirty_unsigned_and_remote_policy(tmp_path):
     assert indexed["lac_cloud_signed_commits"]["ok"] is False
     assert indexed["lac_cloud_remote"]["ok"] is False
     assert "unsigned_count" in indexed["lac_cloud_signed_commits"]["data"]
+
+
+@pytest.mark.parametrize(
+    ("warning_command", "failed_check"),
+    [
+        ("status", "model_hub_clean"),
+        ("log", "model_hub_signed_commits"),
+        ("remote", "model_hub_remote"),
+    ],
+)
+def test_repository_checks_fail_closed_on_unexpected_git_diagnostics(
+    tmp_path, monkeypatch, warning_command, failed_check,
+):
+    gate = _load_gate()
+    repo = tmp_path / "core"
+    (repo / ".git").mkdir(parents=True)
+    remote = "https://github.com/Dkrynen/lac.git"
+    signer = next(iter(gate.TRUSTED_COMMIT_SIGNERS_BY_REPO["model_hub"]))
+
+    def fake_git(path, *args):
+        command = args[0]
+        stdout = ""
+        if command == "log":
+            stdout = f"G\0{signer}\n"
+        elif command == "remote":
+            stdout = f"origin\t{remote} (fetch)\norigin\t{remote} (push)\n"
+        stderr = "warning: unreadable path\n" if command == warning_command else ""
+        return subprocess.CompletedProcess(["git", *args], 0, stdout, stderr)
+
+    monkeypatch.setattr(gate, "_git", fake_git)
+    rows = gate.check_repository("model_hub", repo, required_remote=remote)
+    indexed = {row["name"]: row for row in rows}
+
+    assert indexed[failed_check]["ok"] is False
 
 
 def test_zero_remote_policy_accepts_clean_local_repository(tmp_path):
@@ -874,6 +943,32 @@ def test_release_tag_must_be_annotated_signed_target_head_and_use_trusted_signer
         expected_tag_target=head,
     )
     assert next(row for row in rows if row["name"] == "model_hub_signed_release_tag")["ok"] is True
+
+    def mismatched_embedded_name(repo_path, *args):
+        if args == ("verify-tag", "--raw", "refs/tags/v2.7.0"):
+            return signed_tag(repo_path, *args)
+        if args == ("cat-file", "tag", "refs/tags/v2.7.0"):
+            tag_object = real_git(repo_path, *args)
+            return subprocess.CompletedProcess(
+                args,
+                tag_object.returncode,
+                tag_object.stdout.replace("tag v2.7.0", "tag v9.9.9", 1),
+                tag_object.stderr,
+            )
+        return real_git(repo_path, *args)
+
+    monkeypatch.setattr(gate, "_git", mismatched_embedded_name)
+    rows = gate.check_repository(
+        "model_hub",
+        repo,
+        release_tag="v2.7.0",
+        expected_tag_target=head,
+    )
+    mismatched = next(row for row in rows if row["name"] == "model_hub_signed_release_tag")
+    assert mismatched["ok"] is False
+    assert mismatched["data"]["embedded_name_matches"] is False
+
+    monkeypatch.setattr(gate, "_git", signed_tag)
 
     for adverse_status in ("EXPKEYSIG", "REVKEYSIG", "KEYEXPIRED", "SIGEXPIRED"):
         def adverse_tag(repo_path, *args, adverse_status=adverse_status):

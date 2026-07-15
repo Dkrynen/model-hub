@@ -167,7 +167,11 @@ def main():
         sys.exit(cli.main())
 
     parser = argparse.ArgumentParser(description="LAC web UI server")
-    parser.add_argument("--host", default=HOST, help="Bind host")
+    parser.add_argument(
+        "--host",
+        default=HOST,
+        help="Bind host; non-loopback addresses expose the unauthenticated API",
+    )
     parser.add_argument("--port", type=int, default=PORT, help="Bind port")
     parser.add_argument("--force", action="store_true", help="Kill any process already using the port, then start")
     parser.add_argument("--kill-port", action="store_true", help="Kill whatever holds the port and exit")

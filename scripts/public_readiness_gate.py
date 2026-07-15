@@ -153,6 +153,15 @@ def build_checks(args: argparse.Namespace) -> list[dict[str, Any]]:
             rows,
             args,
             "source",
+            "web_tests",
+            [npm_cmd(), "test"],
+            cwd=web_root,
+            timeout=args.web_timeout,
+        )
+        add_check(
+            rows,
+            args,
+            "source",
             "web_typecheck",
             [npm_cmd(), "run", "typecheck"],
             cwd=web_root,
@@ -165,6 +174,15 @@ def build_checks(args: argparse.Namespace) -> list[dict[str, Any]]:
                 "source",
                 "web_build",
                 [npm_cmd(), "run", "build"],
+                cwd=web_root,
+                timeout=args.web_timeout,
+            )
+            add_check(
+                rows,
+                args,
+                "source",
+                "web_bundle",
+                [npm_cmd(), "run", "check:bundle"],
                 cwd=web_root,
                 timeout=args.web_timeout,
             )
