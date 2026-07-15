@@ -24,6 +24,36 @@ def test_create_unknown_raises():
         create_provider("nonexistent_provider")
 
 
+def test_ollama_list_models_maps_context_length_not_parameter_size(monkeypatch):
+    provider = OllamaProvider()
+    monkeypatch.setattr(
+        provider,
+        "_get",
+        lambda path: {
+            "models": [
+                {
+                    "name": "qwen2.5:7b",
+                    "context_length": 32768,
+                    "details": {
+                        "parameter_size": "7.6B",
+                        "quantization_level": "Q4_K_M",
+                    },
+                },
+                {
+                    "name": "legacy:latest",
+                    "details": {"parameter_size": "3B"},
+                },
+            ]
+        },
+    )
+
+    models = provider.list_models()
+
+    assert models[0].context_length == 32768
+    assert models[1].context_length == 0
+    assert all(isinstance(model.context_length, int) for model in models)
+
+
 def test_default_provider_resolves_configuration_from_explicit_project_root(
     monkeypatch, tmp_path
 ):

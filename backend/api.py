@@ -1023,7 +1023,7 @@ def ollama_status():
 def ollama_models():
     resp = _ollama_request("GET", "/api/tags")
     if resp is None or (isinstance(resp, dict) and "error" in resp):
-        return jsonify([])
+        return jsonify({"error": "Ollama model inventory unavailable"}), 502
     models = []
     for m in resp.get("models", []):
         digest = m.get("digest", "")
@@ -1034,6 +1034,139 @@ def ollama_models():
             "digest_short": digest[:12] if digest else "",
         })
     return jsonify(sorted(models, key=lambda x: x["name"]))
+
+
+_OLLAMA_PROFILE_MAX_MODELS = 2
+_OLLAMA_MODEL_INFO_SCAN_LIMIT = 256
+_OLLAMA_CONTEXT_LENGTH_MAX = 16_777_216
+
+
+def _nullable_ollama_string(value: object) -> str | None:
+    """Keep Ollama-reported strings exact while normalizing missing values."""
+    return value if isinstance(value, str) and value else None
+
+
+def _normalize_ollama_profile(tag: object) -> dict | None:
+    """Project one /api/tags row onto the public model-profile allowlist."""
+    if not isinstance(tag, dict):
+        return None
+    name = tag.get("name")
+    if not isinstance(name, str) or not name:
+        return None
+
+    details = tag.get("details")
+    if not isinstance(details, dict):
+        details = {}
+
+    families_raw = details.get("families")
+    families = None
+    if isinstance(families_raw, list):
+        normalized_families = [
+            family for family in families_raw[:16]
+            if isinstance(family, str) and family
+        ]
+        families = normalized_families or None
+
+    size = tag.get("size")
+    size_gb = 0.0
+    if isinstance(size, (int, float)) and not isinstance(size, bool) and size >= 0:
+        size_gb = round(float(size) / (1024**3), 2)
+
+    digest = tag.get("digest")
+    if not isinstance(digest, str):
+        digest = ""
+    modified = tag.get("modified_at")
+    if not isinstance(modified, str):
+        modified = ""
+
+    return {
+        "name": name,
+        "size_gb": size_gb,
+        "modified": modified,
+        "digest": digest,
+        "digest_short": digest[:12] if digest else "",
+        "format": _nullable_ollama_string(details.get("format")),
+        "family": _nullable_ollama_string(details.get("family")),
+        "families": families,
+        "parameter_size": _nullable_ollama_string(details.get("parameter_size")),
+        "quantization_level": _nullable_ollama_string(details.get("quantization_level")),
+        "context_length": None,
+    }
+
+
+def _extract_ollama_context_length(model_info: object) -> int | None:
+    """Extract one unambiguous, bounded ``*.context_length`` value.
+
+    Ollama prefixes model-info keys with the architecture name.  Matching the
+    suffix avoids an architecture allowlist. Oversized input is rejected rather
+    than partially scanned, so a conflicting value can never hide past the
+    endpoint's processing bound.
+    """
+    if not isinstance(model_info, dict):
+        return None
+    if len(model_info) > _OLLAMA_MODEL_INFO_SCAN_LIMIT:
+        return None
+
+    values: set[int] = set()
+    for key, value in model_info.items():
+        if not isinstance(key, str) or not key.endswith(".context_length"):
+            continue
+        if isinstance(value, bool) or not isinstance(value, int):
+            continue
+        if not 0 < value <= _OLLAMA_CONTEXT_LENGTH_MAX:
+            continue
+        values.add(value)
+        if len(values) > 1:
+            return None
+    return next(iter(values)) if values else None
+
+
+@app.route("/api/ollama/model-profiles", methods=["POST"])
+def ollama_model_profiles():
+    """Return safe local evidence for one or two exact installed model names."""
+    data = request.get_json(silent=True)
+    requested = data.get("models") if isinstance(data, dict) else None
+    if (
+        not isinstance(requested, list)
+        or not 1 <= len(requested) <= _OLLAMA_PROFILE_MAX_MODELS
+        or any(
+            not isinstance(name, str) or not name or name != name.strip()
+            for name in requested
+        )
+    ):
+        return jsonify({"error": "models must contain one or two exact model names"}), 400
+    if len(set(requested)) != len(requested):
+        return jsonify({"error": "models must be unique"}), 400
+
+    tags_response = _ollama_request("GET", "/api/tags")
+    if not isinstance(tags_response, dict) or "error" in tags_response:
+        return jsonify({"error": "Ollama model inventory unavailable"}), 502
+
+    installed: dict[str, dict] = {}
+    tag_rows = tags_response.get("models")
+    if isinstance(tag_rows, list):
+        for row in tag_rows:
+            profile = _normalize_ollama_profile(row)
+            if profile is not None:
+                installed[profile["name"]] = profile
+
+    missing = [name for name in requested if name not in installed]
+    if missing:
+        return jsonify({"error": "model is not installed", "models": missing}), 404
+
+    profiles = []
+    for name in requested:
+        profile = installed[name]
+        show_response = _ollama_request(
+            "POST", "/api/show", {"model": name}, timeout=10,
+        )
+        if isinstance(show_response, dict) and "error" not in show_response:
+            profile["context_length"] = _extract_ollama_context_length(
+                show_response.get("model_info")
+            )
+        profiles.append(profile)
+
+    return jsonify({"profiles": profiles})
 
 
 @app.route("/api/ollama/pull", methods=["POST"])
@@ -1182,22 +1315,42 @@ def ollama_warm():
     return jsonify({"accepted": True}), 200
 
 
+def _unmeasured_performance_diagnosis(summary: str) -> dict:
+    return {
+        "state": "unmeasured",
+        "summary": summary,
+        "signals": [],
+        "actions": [
+            {"kind": "probe", "label": "Run a latency probe"},
+            {"kind": "benchmark", "label": "Run Pro tuning for deeper GPU-offload data"},
+        ],
+    }
+
+
 def _diagnose_performance(metrics: dict | None) -> dict:
     if not metrics:
-        return {
-            "state": "unmeasured",
-            "summary": "No local measurement yet.",
-            "signals": [],
-            "actions": [
-                {"kind": "probe", "label": "Run a latency probe"},
-                {"kind": "benchmark", "label": "Run Pro tuning for deeper GPU-offload data"},
-            ],
-        }
+        return _unmeasured_performance_diagnosis("No Ollama measurement yet.")
 
     tps = float(metrics.get("tokens_per_second") or 0)
-    ttft_ms = float(metrics.get("time_to_first_token_ms") or 0)
+    pre_generation_ms = float(metrics.get("time_to_first_token_ms") or 0)
     load_ms = float(metrics.get("load_duration_ms") or 0)
     prompt_ms = float(metrics.get("prompt_eval_duration_ms") or 0)
+    total_ms = float(metrics.get("total_duration_ms") or 0)
+    eval_ms = float(metrics.get("eval_duration_ms") or 0)
+    eval_count = float(metrics.get("eval_count") or 0)
+    if not any(value > 0 for value in (
+        tps,
+        pre_generation_ms,
+        load_ms,
+        prompt_ms,
+        total_ms,
+        eval_ms,
+        eval_count,
+    )):
+        return _unmeasured_performance_diagnosis(
+            "No usable Ollama measurement was reported."
+        )
+
     signals = []
     actions = []
 
@@ -1209,12 +1362,12 @@ def _diagnose_performance(metrics: dict | None) -> dict:
             "value_ms": round(load_ms, 1),
         })
         actions.append({"kind": "warm", "label": "Warm the model before chat and keep it resident"})
-    if ttft_ms >= 1500 and load_ms < 3000:
+    if pre_generation_ms >= 1500 and load_ms < 3000:
         signals.append({
-            "kind": "ttft",
+            "kind": "pre_generation",
             "severity": "warning",
-            "label": "First token is slow",
-            "value_ms": round(ttft_ms, 1),
+            "label": "Pre-generation is slow",
+            "value_ms": round(pre_generation_ms, 1),
         })
         actions.append({"kind": "context", "label": "Use a smaller context or shorter prompt"})
     if prompt_ms >= 1000:
@@ -1241,11 +1394,11 @@ def _diagnose_performance(metrics: dict | None) -> dict:
             "tokens_per_second": round(tps, 2),
         })
         actions.append({"kind": "tune", "label": "Run Pro tuning if the model feels sluggish"})
-    elif tps >= 100 and ttft_ms >= 1000:
+    elif tps >= 100 and pre_generation_ms >= 1000:
         signals.append({
             "kind": "fast_after_start",
             "severity": "info",
-            "label": "Generation is fast after the first token",
+            "label": "Generation is fast after setup",
             "tokens_per_second": round(tps, 2),
         })
         actions.append({"kind": "warm", "label": "Focus on warmup and prompt prefill, not raw generation speed"})
@@ -1262,7 +1415,7 @@ def _diagnose_performance(metrics: dict | None) -> dict:
     severe = {s.get("severity") for s in signals}
     state = "slow" if "danger" in severe else "watch" if "warning" in severe else "ok"
     if any(s.get("kind") == "fast_after_start" for s in signals):
-        summary = "Generation is fast; perceived latency is mostly before the first token."
+        summary = "Generation is fast; measured latency is mostly before generation."
     elif state == "slow":
         summary = "Generation speed is the main bottleneck."
     elif state == "watch":
@@ -1273,26 +1426,56 @@ def _diagnose_performance(metrics: dict | None) -> dict:
     return {"state": state, "summary": summary, "signals": signals, "actions": actions}
 
 
-def _installed_model_names() -> list[str]:
+def _installed_model_names_status() -> tuple[list[str], bool]:
     resp = _ollama_request("GET", "/api/tags")
     if not isinstance(resp, dict) or "error" in resp:
-        return []
+        return [], False
     return sorted(
         m.get("name")
         for m in resp.get("models", [])
         if isinstance(m, dict) and isinstance(m.get("name"), str)
-    )
+    ), True
 
 
-def _running_model_names() -> list[str]:
+def _running_model_names_status() -> tuple[list[str], bool]:
     resp = _ollama_request("GET", "/api/ps")
     if not isinstance(resp, dict) or "error" in resp:
-        return []
+        return [], False
     return sorted(
         m.get("name")
         for m in resp.get("models", [])
         if isinstance(m, dict) and isinstance(m.get("name"), str)
-    )
+    ), True
+
+
+_PUBLIC_PERFORMANCE_FIELDS = frozenset({
+    "model",
+    "prompt_len",
+    "num_predict",
+    "num_ctx",
+    "temperature",
+    "eval_count",
+    "eval_duration_ms",
+    "total_duration_ms",
+    "load_duration_ms",
+    "prompt_eval_duration_ms",
+    "tokens_per_second",
+    "time_to_first_token_ms",
+    "source",
+    "timestamp",
+    "protocol_id",
+    "fingerprint",
+})
+
+
+def _public_performance_metrics(record: object) -> dict:
+    """Allowlist counters and provenance; never expose prompts or model output."""
+    if not isinstance(record, dict):
+        return {}
+    return {
+        key: value for key, value in record.items()
+        if key in _PUBLIC_PERFORMANCE_FIELDS
+    }
 
 
 def _benchmark_history_for_model(model: str | None) -> list[dict]:
@@ -1302,7 +1485,7 @@ def _benchmark_history_for_model(model: str | None) -> list[dict]:
     if model:
         records = [r for r in records if r.get("model") == model]
     records.sort(key=lambda r: float(r.get("timestamp") or 0), reverse=True)
-    return records[:20]
+    return [_public_performance_metrics(record) for record in records[:20]]
 
 
 @app.route("/api/diagnostics/performance")
@@ -1310,10 +1493,14 @@ def api_performance_diagnostics():
     model = request.args.get("model", "").strip() or None
     records = _benchmark_history_for_model(model)
     latest = records[0] if records else None
+    installed_models, installed_models_reported = _installed_model_names_status()
+    running_models, running_models_reported = _running_model_names_status()
     return jsonify({
         "model": model,
-        "installed_models": _installed_model_names(),
-        "running_models": _running_model_names(),
+        "installed_models": installed_models,
+        "installed_models_reported": installed_models_reported,
+        "running_models": running_models,
+        "running_models_reported": running_models_reported,
         "history": records,
         "latest": latest,
         "diagnosis": _diagnose_performance(latest),
@@ -1329,6 +1516,7 @@ def api_performance_probe():
 
     prompt = "Reply with one short sentence confirming the LAC latency probe is ready."
     num_predict = 32
+    num_ctx = _interactive_context()
     result = _ollama_request(
         "POST",
         "/api/generate",
@@ -1338,7 +1526,7 @@ def api_performance_probe():
             "stream": False,
             "keep_alive": "30m",
             "options": {
-                "num_ctx": _interactive_context(),
+                "num_ctx": num_ctx,
                 "num_predict": num_predict,
                 "temperature": 0,
             },
@@ -1356,6 +1544,9 @@ def api_performance_probe():
 
     metrics = build_metrics(result, model.strip(), prompt, num_predict, 0.0)
     metrics["source"] = "diagnostic_probe"
+    metrics["protocol_id"] = "lac.quick-latency.v1"
+    metrics["num_ctx"] = num_ctx
+    metrics = _public_performance_metrics(metrics)
     return jsonify({
         "model": model.strip(),
         "state": "done",
@@ -4310,8 +4501,8 @@ def ollama_library():
 @app.route("/api/ollama/ps")
 def ollama_ps():
     resp = _ollama_request("GET", "/api/ps")
-    if resp is None:
-        return jsonify({"running": False, "models": []})
+    if not isinstance(resp, dict) or "error" in resp:
+        return jsonify({"error": "Ollama residency unavailable"}), 502
     models = []
     for m in resp.get("models", []):
         models.append({

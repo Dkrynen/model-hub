@@ -65,6 +65,39 @@ def test_load_calibration_measured_override(tmp_path):
     cal = load_calibration(info, _STACK, str(p))
     assert cal.measured[("falcon3:3b", "Q4_K_M")].median_tps == 178.0
 
+
+def test_legacy_row_without_fingerprint_is_not_classified_as_measured(tmp_path):
+    """Pre-fingerprint history remains useful, but its machine provenance is
+    unknowable and therefore cannot truthfully be presented as an exact run."""
+    info = _info()
+    p = tmp_path / "results.jsonl"
+    _write_results(p, info, [("falcon3:3b", 178.0, "no-fp")])
+
+    cal = load_calibration(info, _STACK, str(p))
+    tps, src, band = apply_calibration(
+        200.0, "falcon3:3b", "Q4_K_M", "gpu", cal,
+    )
+
+    assert tps == 178.0
+    assert src == "estimated"
+    assert band >= 50.0
+
+
+def test_matching_fingerprint_samples_do_not_mix_with_legacy_rows(tmp_path):
+    info = _info()
+    p = tmp_path / "results.jsonl"
+    _write_results(p, info, [
+        ("falcon3:3b", 999.0, "no-fp"),
+        ("falcon3:3b", 178.0, "match"),
+    ])
+
+    cal = load_calibration(info, _STACK, str(p))
+    tps, src, _ = apply_calibration(
+        200.0, "falcon3:3b", "Q4_K_M", "gpu", cal,
+    )
+
+    assert (tps, src) == (178.0, "measured")
+
 def test_load_calibration_regime_factor(tmp_path):
     info = _info()
     p = tmp_path / "results.jsonl"
@@ -186,8 +219,8 @@ def test_apply_calibration_falls_back_to_any_measured_quant_for_same_model():
         regime_factor={}, regime_band_pct={}, n=1,
     )
     tps, src, band = apply_calibration(999.0, "qwen3:0.6b", "F16", "gpu", cal)
-    assert (tps, src) == (417.0, "measured")
-    assert band == 25.0
+    assert (tps, src) == (417.0, "calibrated")
+    assert band >= 50.0
 
 
 def test_apply_calibration_exact_match_still_wins_over_fallback():
@@ -214,5 +247,24 @@ def test_apply_calibration_falls_back_when_multiple_other_quants_measured():
         regime_factor={}, regime_band_pct={}, n=6,
     )
     tps, src, band = apply_calibration(999.0, "m", "F16", "gpu", cal)
-    assert src == "measured"
+    assert src == "calibrated"
     assert tps == 90.0  # the higher-n_runs entry wins the tie-break
+
+
+def test_cross_quant_prefers_current_machine_measurement_over_larger_legacy_sample():
+    cal = Calibration(
+        measured={
+            ("m", "Q8"): MeasuredStat(
+                80.0, 10, 6.0, provenance="estimated",
+            ),
+            ("m", "Q4_K_M"): MeasuredStat(
+                50.0, 1, 25.0, provenance="measured",
+            ),
+        },
+        regime_factor={}, regime_band_pct={}, n=11,
+    )
+
+    tps, src, band = apply_calibration(999.0, "m", "F16", "gpu", cal)
+
+    assert (tps, src) == (50.0, "calibrated")
+    assert band >= 50.0

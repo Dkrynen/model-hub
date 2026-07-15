@@ -103,6 +103,7 @@ class MeasuredStat:
     median_tps: float
     n_runs: int
     spread_pct: float
+    provenance: str = "measured"
 
 
 @dataclass
@@ -131,8 +132,11 @@ def load_calibration(info, stack, results_path, models=None) -> Calibration:
     ids = {m.id: m for m in (models or load_models())}
     bw = _estimate_bandwidth(info)
 
-    # (id,quant) -> list of measured tok/s ; regime -> list of (real/theoretical)
-    samples: dict = {}
+    # Keep exact current-machine samples separate from pre-fingerprint rows.
+    # Legacy values remain useful as estimates, but mixing them would make an
+    # unknown machine/stack look like an exact measurement for this one.
+    exact_samples: dict = {}
+    legacy_samples: dict = {}
     ratios: dict = {}
     n = 0
     for line in path.read_text().splitlines():
@@ -160,9 +164,10 @@ def load_calibration(info, stack, results_path, models=None) -> Calibration:
         if model is None or quant is None:
             continue
         n += 1
-        samples.setdefault((cid, qname), []).append(float(tps))
         if legacy:
-            continue                          # legacy entries: override only, NOT the fit
+            legacy_samples.setdefault((cid, qname), []).append(float(tps))
+            continue                          # unknown provenance: never fit current hardware
+        exact_samples.setdefault((cid, qname), []).append(float(tps))
         vram = _estimate_vram(model, quant, _CTX)
         split = _compute_split_plan(vram, info, model)
         if split is None:
@@ -172,10 +177,14 @@ def load_calibration(info, stack, results_path, models=None) -> Calibration:
             ratios.setdefault(speed_regime(split), []).append(float(tps) / theo)
 
     measured = {}
-    for key, vals in samples.items():
+    for key in exact_samples.keys() | legacy_samples.keys():
+        vals = exact_samples.get(key) or legacy_samples[key]
+        provenance = "measured" if key in exact_samples else "estimated"
         med = statistics.median(vals)
         spread = (max(vals) - min(vals)) / med * 100 if len(vals) > 1 and med else 0.0
-        measured[key] = MeasuredStat(round(med, 2), len(vals), round(spread, 1))
+        measured[key] = MeasuredStat(
+            round(med, 2), len(vals), round(spread, 1), provenance,
+        )
 
     regime_factor = {r: _geomean(v) for r, v in ratios.items()}
     regime_band_pct = {r: _loo_band(v) for r, v in ratios.items()}
@@ -201,28 +210,40 @@ _ESTIMATED_BAND = 50.0
 def apply_calibration(theoretical_tps, catalog_id, quant_name, regime, calibration):
     """Turn a theoretical tok/s estimate into (tok_s, source, band_pct).
 
-    Precedence: exact measured (id,quant) > ANY other measured quant for
-    the same model id (looser fallback -- see below) > regime-level
-    calibrated factor > uncalibrated estimated. A None calibration always
-    falls through to "estimated".
+    Precedence: exact current-machine (id,quant) > another quant for the
+    same model id (a calibrated proxy, never an exact measurement) >
+    regime-level calibrated factor > uncalibrated estimated. Legacy rows
+    without a machine fingerprint can supply an estimate, but can never be
+    labelled measured. A None calibration always falls through to
+    "estimated".
 
     The fallback exists because recommend() scores every quant per model
     but returns only the single best-SCORING one: a small model can have
     F16 win on composite score even though a plain `ollama pull` actually
     installs (and LAC Pro's autopilot benchmarks) Q4_K_M. Without this
-    fallback, a real measured run never surfaces as "measured" unless its
-    exact quant happens to also be the highest-scoring one.
+    fallback, a real run can still inform another quant's recommendation,
+    while its provenance remains explicit.
     """
     if calibration is None:
         return round(theoretical_tps, 1), "estimated", _ESTIMATED_BAND
     stat = calibration.measured.get((catalog_id, quant_name))
+    cross_quant = False
     if stat is None:
         candidates = [(k, v) for k, v in calibration.measured.items() if k[0] == catalog_id]
         if candidates:
-            candidates.sort(key=lambda kv: (-kv[1].n_runs, kv[0][1]))
+            candidates.sort(key=lambda kv: (
+                kv[1].provenance != "measured",
+                -kv[1].n_runs,
+                kv[0][1],
+            ))
             stat = candidates[0][1]
+            cross_quant = True
     if stat is not None:
         band = stat.spread_pct if stat.n_runs > 1 else 25.0  # single-sample: flagged, not 0
+        if stat.provenance != "measured":
+            return stat.median_tps, "estimated", max(band, _ESTIMATED_BAND)
+        if cross_quant:
+            return stat.median_tps, "calibrated", max(band, _ESTIMATED_BAND)
         return stat.median_tps, "measured", band
     factor = calibration.regime_factor.get(regime)
     if factor is not None:

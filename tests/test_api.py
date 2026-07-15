@@ -261,6 +261,193 @@ def test_ollama_status(flask_app, ollama_available):
     assert r.status_code == 200
 
 
+def test_ollama_model_profiles_return_only_exact_local_evidence(monkeypatch, flask_app):
+    from backend import api as api_mod
+
+    digest = "sha256:" + ("a" * 64)
+    calls = []
+
+    def fake_ollama_request(method, path, json_body=None, stream=False, timeout=30):
+        calls.append((method, path, json_body, timeout))
+        if path == "/api/tags":
+            return {
+                "models": [
+                    {
+                        "name": "qwen2.5:7b",
+                        "size": 4_500_000_000,
+                        "modified_at": "2026-07-15T12:00:00Z",
+                        "digest": digest,
+                        "details": {
+                            "format": "gguf",
+                            "family": "qwen2",
+                            "families": ["qwen2"],
+                            "parameter_size": "7.6B",
+                            "quantization_level": "Q4_K_M",
+                            "not_allowlisted": "must stay private",
+                        },
+                    },
+                    {
+                        "name": "custom:latest",
+                        "size": 123,
+                        "modified_at": "",
+                        "digest": "custom-digest",
+                    },
+                ]
+            }
+        assert path == "/api/show"
+        assert json_body in ({"model": "custom:latest"}, {"model": "qwen2.5:7b"})
+        if json_body["model"] == "qwen2.5:7b":
+            return {
+                "model_info": {
+                    "qwen2.context_length": 32768,
+                    "qwen2.embedding_length": 3584,
+                    "context_length": 999999,
+                },
+                "template": "never return this",
+                "system": "never return this either",
+                "modelfile": "FROM secret/path",
+                "arbitrary": {"private": True},
+            }
+        return {"model_info": {"custom.context_length": "unknown"}}
+
+    monkeypatch.setattr(api_mod, "_ollama_request", fake_ollama_request)
+
+    response = flask_app.test_client().post(
+        "/api/ollama/model-profiles",
+        json={"models": ["custom:latest", "qwen2.5:7b"]},
+    )
+
+    assert response.status_code == 200
+    profiles = response.get_json()["profiles"]
+    assert [profile["name"] for profile in profiles] == ["custom:latest", "qwen2.5:7b"]
+    assert set(profiles[0]) == {
+        "name",
+        "size_gb",
+        "modified",
+        "digest",
+        "digest_short",
+        "format",
+        "family",
+        "families",
+        "parameter_size",
+        "quantization_level",
+        "context_length",
+    }
+    assert profiles[0] == {
+        "name": "custom:latest",
+        "size_gb": 0.0,
+        "modified": "",
+        "digest": "custom-digest",
+        "digest_short": "custom-diges",
+        "format": None,
+        "family": None,
+        "families": None,
+        "parameter_size": None,
+        "quantization_level": None,
+        "context_length": None,
+    }
+    assert profiles[1]["digest"] == digest
+    assert profiles[1]["digest_short"] == digest[:12]
+    assert profiles[1]["format"] == "gguf"
+    assert profiles[1]["family"] == "qwen2"
+    assert profiles[1]["families"] == ["qwen2"]
+    assert profiles[1]["parameter_size"] == "7.6B"
+    assert profiles[1]["quantization_level"] == "Q4_K_M"
+    assert profiles[1]["context_length"] == 32768
+    assert [call[1] for call in calls] == ["/api/tags", "/api/show", "/api/show"]
+    assert all(call[3] <= 10 for call in calls[1:])
+
+
+def test_ollama_model_profiles_fail_closed_before_show(monkeypatch, flask_app):
+    from backend import api as api_mod
+
+    calls = []
+
+    def fake_ollama_request(method, path, json_body=None, stream=False, timeout=30):
+        calls.append((path, json_body))
+        return {"models": [{"name": "installed:1b", "size": 1, "digest": "exact"}]}
+
+    monkeypatch.setattr(api_mod, "_ollama_request", fake_ollama_request)
+    client = flask_app.test_client()
+
+    too_many = client.post(
+        "/api/ollama/model-profiles",
+        json={"models": ["installed:1b", "other:1b", "third:1b"]},
+    )
+    assert too_many.status_code == 400
+    assert calls == []
+
+    duplicate = client.post(
+        "/api/ollama/model-profiles",
+        json={"models": ["installed:1b", "installed:1b"]},
+    )
+    assert duplicate.status_code == 400
+    assert calls == []
+
+    unknown = client.post(
+        "/api/ollama/model-profiles",
+        json={"models": ["Installed:1b"]},
+    )
+    assert unknown.status_code == 404
+    assert unknown.get_json() == {
+        "error": "model is not installed",
+        "models": ["Installed:1b"],
+    }
+    assert calls == [("/api/tags", None)]
+
+
+def test_ollama_context_length_extraction_is_suffix_only_and_fail_closed():
+    from backend import api as api_mod
+
+    assert api_mod._extract_ollama_context_length({
+        "architecture.context_length": 8192,
+        "context_length": 131072,
+        "nested": {"architecture.context_length": 262144},
+        "other.context_length": True,
+    }) == 8192
+    assert api_mod._extract_ollama_context_length({
+        "a.context_length": 8192,
+        "b.context_length": 16384,
+    }) is None
+    assert api_mod._extract_ollama_context_length({
+        "a.context_length": -1,
+    }) is None
+
+
+def test_ollama_inventory_and_residency_routes_fail_closed_on_upstream_error(monkeypatch, flask_app):
+    from backend import api as api_mod
+
+    monkeypatch.setattr(api_mod, "_ollama_request", lambda *args, **kwargs: {"error": "offline"})
+    client = flask_app.test_client()
+
+    inventory = client.get("/api/ollama/models")
+    residency = client.get("/api/ollama/ps")
+
+    assert inventory.status_code == 502
+    assert inventory.get_json() == {"error": "Ollama model inventory unavailable"}
+    assert residency.status_code == 502
+    assert residency.get_json() == {"error": "Ollama residency unavailable"}
+
+
+def test_ollama_context_length_extraction_rejects_oversized_model_info():
+    from backend import api as api_mod
+
+    scan_limit = api_mod._OLLAMA_MODEL_INFO_SCAN_LIMIT
+    oversized = {"a.context_length": 8192}
+    oversized.update({f"filler_{index}": index for index in range(scan_limit - 1)})
+    oversized["b.context_length"] = 16384
+
+    assert len(oversized) == scan_limit + 1
+    assert api_mod._extract_ollama_context_length(oversized) is None
+
+    oversized_without_conflict = {"a.context_length": 8192}
+    oversized_without_conflict.update({
+        f"filler_{index}": index for index in range(scan_limit)
+    })
+    assert len(oversized_without_conflict) == scan_limit + 1
+    assert api_mod._extract_ollama_context_length(oversized_without_conflict) is None
+
+
 def test_openapi_endpoint(flask_app):
     client = flask_app.test_client()
     r = client.get("/api/openapi.json")
@@ -956,9 +1143,56 @@ def test_performance_diagnosis_detects_fast_generation_slow_start():
     })
 
     assert diagnosis["state"] == "watch"
-    assert "first token" in diagnosis["summary"]
+    assert "before generation" in diagnosis["summary"]
+    assert all("first token" not in signal["label"].lower() for signal in diagnosis["signals"])
     assert any(signal["kind"] == "fast_after_start" for signal in diagnosis["signals"])
     assert any(action["kind"] == "warm" for action in diagnosis["actions"])
+
+
+def test_performance_diagnosis_keeps_unusable_counters_unmeasured():
+    from backend import api as api_mod
+
+    unusable_records = [
+        {"model": "tiny:latest", "source": "diagnostic_probe"},
+        {
+            "tokens_per_second": 0,
+            "time_to_first_token_ms": 0,
+            "load_duration_ms": 0,
+            "prompt_eval_duration_ms": 0,
+            "total_duration_ms": 0,
+            "eval_duration_ms": 0,
+            "eval_count": 0,
+        },
+    ]
+
+    for metrics in unusable_records:
+        diagnosis = api_mod._diagnose_performance(metrics)
+        assert diagnosis["state"] == "unmeasured"
+        assert diagnosis["summary"] == "No usable Ollama measurement was reported."
+        assert all(signal.get("kind") != "healthy" for signal in diagnosis["signals"])
+
+
+def test_performance_diagnostics_reports_inventory_and_residency_reliability(monkeypatch, flask_app):
+    from backend import api as api_mod
+
+    def fake_ollama_request(method, path, *args, **kwargs):
+        if path == "/api/tags":
+            return {"models": [{"name": "tiny:latest"}]}
+        if path == "/api/ps":
+            return {"error": "offline"}
+        raise AssertionError(path)
+
+    monkeypatch.setattr(api_mod, "_ollama_request", fake_ollama_request)
+    monkeypatch.setattr(api_mod, "_benchmark_history_for_model", lambda model: [])
+
+    response = flask_app.test_client().get("/api/diagnostics/performance?model=tiny%3Alatest")
+
+    assert response.status_code == 200
+    data = response.get_json()
+    assert data["installed_models"] == ["tiny:latest"]
+    assert data["installed_models_reported"] is True
+    assert data["running_models"] == []
+    assert data["running_models_reported"] is False
 
 
 def test_performance_probe_returns_metrics_and_diagnosis(monkeypatch, flask_app):
@@ -978,6 +1212,7 @@ def test_performance_probe_returns_metrics_and_diagnosis(monkeypatch, flask_app)
         }
 
     monkeypatch.setattr(api_mod, "_ollama_request", fake_ollama_request)
+    monkeypatch.setattr(api_mod, "_interactive_context", lambda: 6144)
 
     r = flask_app.test_client().post("/api/diagnostics/performance/probe", json={"model": "tiny:latest"})
 
@@ -985,12 +1220,41 @@ def test_performance_probe_returns_metrics_and_diagnosis(monkeypatch, flask_app)
     data = r.get_json()
     assert data["state"] == "done"
     assert data["metrics"]["source"] == "diagnostic_probe"
+    assert data["metrics"]["protocol_id"] == "lac.quick-latency.v1"
+    assert data["metrics"]["num_ctx"] == 6144
     assert data["metrics"]["tokens_per_second"] == 160.0
     assert data["metrics"]["load_duration_ms"] == 2000.0
+    assert "prompt" not in data["metrics"]
+    assert "response" not in data["metrics"]
     assert data["diagnosis"]["state"] in {"ok", "watch"}
     assert captured["path"] == "/api/generate"
     assert captured["json"]["keep_alive"] == "30m"
     assert captured["json"]["options"]["num_predict"] == 32
+    assert captured["json"]["options"]["num_ctx"] == 6144
+
+
+def test_performance_history_is_bounded_allowlisted_and_redacted(monkeypatch):
+    from backend import api as api_mod
+    from backend.cookbook import benchmark
+
+    monkeypatch.setattr(benchmark, "history", lambda: [{
+        "model": "tiny:latest",
+        "timestamp": 42,
+        "source": "pro_benchmark",
+        "tokens_per_second": 12.5,
+        "time_to_first_token_ms": 120,
+        "prompt": "private benchmark prompt",
+        "response": "private model output",
+        "arbitrary": {"must": "not pass through"},
+    }])
+
+    assert api_mod._benchmark_history_for_model("tiny:latest") == [{
+        "model": "tiny:latest",
+        "timestamp": 42,
+        "source": "pro_benchmark",
+        "tokens_per_second": 12.5,
+        "time_to_first_token_ms": 120,
+    }]
 
 
 # --- POST /api/pro/unlock (web "Activate Pro" -> bootstrap-install the plugin) ---

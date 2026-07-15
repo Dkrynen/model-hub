@@ -44,12 +44,19 @@ class OllamaProvider(LLMProvider):
         models = []
         for m in result.get("models", []):
             details = m.get("details", {})
+            context_length = m.get("context_length", details.get("context_length", 0))
+            if (
+                isinstance(context_length, bool)
+                or not isinstance(context_length, int)
+                or context_length <= 0
+            ):
+                context_length = 0
             models.append(
                 ModelInfo(
                     name=m.get("name", ""),
                     size=m.get("size", 0),
                     modified=m.get("modified", ""),
-                    context_length=details.get("parameter_size", 0),
+                    context_length=context_length,
                     quant=details.get("quantization_level", ""),
                     family=details.get("family", ""),
                     raw=m,
