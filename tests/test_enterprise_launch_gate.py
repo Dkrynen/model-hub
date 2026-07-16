@@ -40,6 +40,7 @@ def _load_gate():
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    module._download_github_web_flow_key = lambda: None
     return module
 
 
@@ -936,6 +937,7 @@ def test_release_tag_must_be_annotated_signed_target_head_and_use_trusted_signer
 
     monkeypatch.setattr(gate, "_git", signed_tag)
     monkeypatch.setattr(gate, "TRUSTED_COMMIT_SIGNERS_BY_REPO", {"model_hub": frozenset({signer})})
+    monkeypatch.setattr(gate, "TRUSTED_RELEASE_TAG_SIGNERS", frozenset({signer}))
     rows = gate.check_repository(
         "model_hub",
         repo,
@@ -1005,7 +1007,7 @@ def test_release_tag_must_be_annotated_signed_target_head_and_use_trusted_signer
     )
     assert next(row for row in rows if row["name"] == "model_hub_signed_release_tag")["ok"] is False
 
-    monkeypatch.setattr(gate, "TRUSTED_COMMIT_SIGNERS_BY_REPO", {"model_hub": frozenset()})
+    monkeypatch.setattr(gate, "TRUSTED_RELEASE_TAG_SIGNERS", frozenset())
     rows = gate.check_repository(
         "model_hub",
         repo,
@@ -1038,6 +1040,197 @@ def test_subprocess_timeout_returns_a_structured_failure(monkeypatch):
     assert result.returncode == 124
     assert result.stdout == ""
     assert result.stderr == "command unavailable or timed out"
+
+
+def test_subprocess_custom_timeout_and_environment_are_forwarded(monkeypatch):
+    gate = _load_gate()
+    captured = {}
+
+    def completed(*args, **kwargs):
+        captured.update(kwargs)
+        return subprocess.CompletedProcess(args[0], 0, "ok", "")
+
+    monkeypatch.setattr(gate.subprocess, "run", completed)
+    result = gate._run(
+        ["git", "status"],
+        timeout_seconds=120,
+        env={"GNUPGHOME": "pinned-web-flow-keyring"},
+    )
+
+    assert result.returncode == 0
+    assert captured["timeout"] == 120
+    assert captured["env"]["GNUPGHOME"] == "pinned-web-flow-keyring"
+    assert captured["env"].get("PATH")
+
+
+def test_web_flow_keyring_requires_pinned_bytes_and_fingerprint(
+    tmp_path, monkeypatch,
+):
+    gate = _load_gate()
+    key = b"pinned GitHub web-flow public key"
+    fingerprint = "968479A1AFF927E37D1A566BB5690EEEBB952194"
+    monkeypatch.setattr(
+        gate, "GITHUB_WEB_FLOW_KEY_SHA256", hashlib.sha256(key).hexdigest(),
+    )
+    monkeypatch.setattr(gate, "_download_github_web_flow_key", lambda: key)
+    monkeypatch.setattr(gate, "_find_gpg", lambda: "gpg")
+    results = iter([
+        subprocess.CompletedProcess(["gpg", "--import"], 0, "", ""),
+        subprocess.CompletedProcess(
+            ["gpg", "--fingerprint"], 0,
+            f"fpr:::::::::{fingerprint}:\n", "",
+        ),
+    ])
+    monkeypatch.setattr(gate, "_run", lambda *args, **kwargs: next(results))
+
+    home = tmp_path / "gnupg"
+    env = gate._prepare_github_web_flow_keyring(home)
+
+    assert env == ({"GNUPGHOME": str(home)}, "gpg")
+    assert (home / "github-web-flow.gpg").read_bytes() == key
+
+    monkeypatch.setattr(gate, "_download_github_web_flow_key", lambda: b"tampered")
+    assert gate._prepare_github_web_flow_keyring(tmp_path / "tampered") is None
+
+
+def test_web_flow_keyring_rejects_missing_gpg_import_failure_and_wrong_fingerprint(
+    tmp_path, monkeypatch,
+):
+    gate = _load_gate()
+    key = b"pinned GitHub web-flow public key"
+    monkeypatch.setattr(
+        gate, "GITHUB_WEB_FLOW_KEY_SHA256", hashlib.sha256(key).hexdigest(),
+    )
+    monkeypatch.setattr(gate, "_download_github_web_flow_key", lambda: key)
+
+    monkeypatch.setattr(gate, "_find_gpg", lambda: None)
+    assert gate._prepare_github_web_flow_keyring(tmp_path / "missing-gpg") is None
+
+    monkeypatch.setattr(gate, "_find_gpg", lambda: "gpg")
+    monkeypatch.setattr(gate, "_run", lambda *args, **kwargs: subprocess.CompletedProcess(
+        args[0], 1, "", "import failed",
+    ))
+    assert gate._prepare_github_web_flow_keyring(tmp_path / "failed-import") is None
+
+    results = iter([
+        subprocess.CompletedProcess(["gpg", "--import"], 0, "", ""),
+        subprocess.CompletedProcess(
+            ["gpg", "--fingerprint"], 0,
+            "fpr:::::::::0000000000000000000000000000000000000000:\n", "",
+        ),
+    ])
+    monkeypatch.setattr(gate, "_run", lambda *args, **kwargs: next(results))
+    assert gate._prepare_github_web_flow_keyring(tmp_path / "wrong-fingerprint") is None
+
+
+def test_git_for_windows_gpg_paths_are_translated_without_changing_native_paths():
+    gate = _load_gate()
+
+    assert gate._path_for_gpg(
+        r"C:\Program Files\Git\usr\bin\gpg.exe",
+        Path(r"C:\Users\User\Temp\github-web-flow.gpg"),
+    ) == "/c/Users/User/Temp/github-web-flow.gpg"
+    native = Path("/tmp/github-web-flow.gpg")
+    assert gate._path_for_gpg("gpg", native) == str(native)
+
+
+def test_model_hub_signature_history_accepts_scoped_web_flow_unknown_trust_state(
+    tmp_path, monkeypatch,
+):
+    gate = _load_gate()
+    repo = tmp_path / "core"
+    (repo / ".git").mkdir(parents=True)
+    fingerprint = gate.GITHUB_WEB_FLOW_FINGERPRINT
+    reviewed_commit = next(iter(gate.TRUSTED_WEB_FLOW_COMMITS_BY_REPO["model_hub"]))
+    pinned_gpg = r"C:\Program Files\Git\usr\bin\gpg.exe"
+    captured = {}
+
+    def fake_git(path, *args, **kwargs):
+        command = args[2] if args[0] == "-c" else args[0]
+        if command == "status":
+            return subprocess.CompletedProcess(args, 0, "", "")
+        if command == "log":
+            captured.update(kwargs)
+            captured["args"] = args
+            return subprocess.CompletedProcess(
+                args, 0, f"{reviewed_commit}\0U\0{fingerprint}\n", "",
+            )
+        if command == "remote":
+            remote = "https://github.com/Dkrynen/lac.git"
+            return subprocess.CompletedProcess(
+                args, 0,
+                f"origin\t{remote} (fetch)\norigin\t{remote} (push)\n", "",
+            )
+        raise AssertionError(args)
+
+    monkeypatch.setattr(gate, "_git", fake_git)
+    monkeypatch.setattr(
+        gate,
+        "_prepare_github_web_flow_keyring",
+        lambda home: ({"GNUPGHOME": str(home)}, pinned_gpg),
+    )
+
+    rows = gate.check_repository(
+        "model_hub",
+        repo,
+        required_remote="https://github.com/Dkrynen/lac.git",
+    )
+
+    signed = next(row for row in rows if row["name"] == "model_hub_signed_commits")
+    assert signed["ok"] is True
+    assert captured["args"][:2] == (
+        "-c", f"gpg.openpgp.program={pinned_gpg}",
+    )
+    assert captured["timeout_seconds"] == gate.SIGNATURE_HISTORY_TIMEOUT_SECONDS
+    assert captured["env"]["GNUPGHOME"]
+
+
+def test_model_hub_signature_history_fails_closed_without_pinned_keyring(
+    tmp_path, monkeypatch,
+):
+    gate = _load_gate()
+    repo = tmp_path / "core"
+    repo.mkdir()
+    monkeypatch.setattr(
+        gate, "_prepare_github_web_flow_keyring", lambda home: None,
+    )
+
+    def unexpected_git(*args, **kwargs):
+        raise AssertionError("ambient Git keyring must not be used")
+
+    monkeypatch.setattr(gate, "_git", unexpected_git)
+
+    result = gate._signature_log("model_hub", repo, "HEAD")
+
+    assert result.returncode != 0
+    assert result.stdout == ""
+    assert "pinned GitHub web-flow keyring" in result.stderr
+
+
+def test_unknown_ownertrust_exception_is_exactly_scoped_to_web_flow_model_hub():
+    gate = _load_gate()
+    fingerprint = gate.GITHUB_WEB_FLOW_FINGERPRINT
+    reviewed_commit = next(iter(gate.TRUSTED_WEB_FLOW_COMMITS_BY_REPO["model_hub"]))
+    other_commit = "0" * 40
+
+    assert gate._valid_commit_signature(
+        "model_hub", reviewed_commit, "U", fingerprint,
+    ) is True
+    assert gate._valid_commit_signature(
+        "lac_cloud", reviewed_commit, "U", fingerprint,
+    ) is False
+    assert gate._valid_commit_signature(
+        "model_hub", reviewed_commit, "U", "OTHER",
+    ) is False
+    assert gate._valid_commit_signature(
+        "model_hub", reviewed_commit, "N", fingerprint,
+    ) is False
+    assert gate._valid_commit_signature(
+        "model_hub", other_commit, "U", fingerprint,
+    ) is False
+    assert gate._valid_commit_signature(
+        "model_hub", other_commit, "G", fingerprint,
+    ) is False
 
 
 def test_local_scope_membership_is_an_exact_subset_with_max_ages():
@@ -1288,9 +1481,17 @@ def test_cloud_signed_records_stripped_of_lac_cloud_commit_fail_only_on_signatur
 def test_trust_roots_are_onboarded_and_well_formed():
     gate = _load_gate()
 
+    assert gate.GITHUB_WEB_FLOW_KEY_URL == "https://github.com/web-flow.gpg"
+    assert gate.GITHUB_WEB_FLOW_KEY_SHA256 == (
+        "6e8af687f60cf3f403151c8fb1b26e95e6f9e424ca60cc8f3787bd4466a3ef84"
+    )
+    assert gate.GITHUB_WEB_FLOW_FINGERPRINT == (
+        "968479A1AFF927E37D1A566BB5690EEEBB952194"
+    )
     assert gate.TRUSTED_COMMIT_SIGNERS_BY_REPO == {
         "model_hub": frozenset({
             "SHA256:1e+lhgtrePHcjsvpPTQLLYRqwgwgBp07HCi2mdo+Q8c",
+            "968479A1AFF927E37D1A566BB5690EEEBB952194",
         }),
         "lac_pro": frozenset({
             "SHA256:1e+lhgtrePHcjsvpPTQLLYRqwgwgBp07HCi2mdo+Q8c",
@@ -1298,6 +1499,14 @@ def test_trust_roots_are_onboarded_and_well_formed():
         "lac_cloud": frozenset({
             "SHA256:1e+lhgtrePHcjsvpPTQLLYRqwgwgBp07HCi2mdo+Q8c",
             "SHA256:CdT6M0USfhHLOm5UqlZdwA+OdJqAtoxUGcPKtXCGKYI",
+        }),
+    }
+    assert gate.TRUSTED_RELEASE_TAG_SIGNERS == frozenset({
+        "SHA256:1e+lhgtrePHcjsvpPTQLLYRqwgwgBp07HCi2mdo+Q8c",
+    })
+    assert gate.TRUSTED_WEB_FLOW_COMMITS_BY_REPO == {
+        "model_hub": frozenset({
+            "a25cec76589f7fded297c37b5e0ff407eed31fc0",
         }),
     }
     assert all(
@@ -1355,6 +1564,43 @@ def test_cloud_only_signer_cannot_authorize_a_model_hub_release_tag(tmp_path, mo
     monkeypatch.setattr(gate, "TRUSTED_COMMIT_SIGNERS_BY_REPO", {
         "model_hub": frozenset(),
         "lac_cloud": frozenset({signer}),
+    })
+
+    rows = gate.check_repository(
+        "model_hub",
+        repo,
+        release_tag="v2.7.0",
+        expected_tag_target=head,
+    )
+
+    assert next(
+        row for row in rows if row["name"] == "model_hub_signed_release_tag"
+    )["ok"] is False
+
+
+def test_github_web_flow_commit_signer_cannot_authorize_a_release_tag(
+    tmp_path, monkeypatch,
+):
+    gate = _load_gate()
+    repo = _repo(tmp_path, "web-flow-tagged")
+    head = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "tag", "-a", "v2.7.0", "-m", "release 2.7.0")
+    real_git = gate._git
+    signer = gate.GITHUB_WEB_FLOW_FINGERPRINT
+
+    def signed_tag(repo_path, *args, **kwargs):
+        if args == ("verify-tag", "--raw", "refs/tags/v2.7.0"):
+            return subprocess.CompletedProcess(
+                args,
+                0,
+                "",
+                f"[GNUPG:] NEWSIG\n[GNUPG:] VALIDSIG {signer} 2026-07-16 0 4 0 1 10 00 {signer}\n",
+            )
+        return real_git(repo_path, *args, **kwargs)
+
+    monkeypatch.setattr(gate, "_git", signed_tag)
+    monkeypatch.setattr(gate, "TRUSTED_COMMIT_SIGNERS_BY_REPO", {
+        "model_hub": frozenset({signer}),
     })
 
     rows = gate.check_repository(

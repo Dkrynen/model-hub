@@ -102,11 +102,31 @@ supply an alternative path.
 
 Accepted status values are `approved`, `passed`, and `verified`. Placeholder,
 pending, unsigned, stale, future-dated, untrusted, wrong-version, or malformed
-records fail closed. Commit and evidence-review trust roots were onboarded in a reviewed source
-commit on 2026-07-14, with commit-signer allowlists scoped per repository (the lac-cloud contributor key is trusted for lac-cloud history only; release tags verify against the model-hub allowlist); the Authenticode subject and thumbprint allowlists
-remain intentionally empty until the release signing certificate exists, and
-an empty allowlist fails closed. An operator-supplied file cannot add its own
-signer.
+records fail closed. Commit and evidence-review trust roots were onboarded in
+reviewed source. The commit-signer allowlists remain scoped per repository: the
+lac-cloud contributor key is trusted for lac-cloud history only, while GitHub's
+web-flow signing key is trusted for model-hub only so signed squash merges can
+be verified without weakening either private repository. The gate downloads
+GitHub's published `web-flow.gpg` key into an ephemeral keyring, requires the
+pinned file SHA-256
+`6e8af687f60cf3f403151c8fb1b26e95e6f9e424ca60cc8f3787bd4466a3ef84`,
+requires full fingerprint `968479A1AFF927E37D1A566BB5690EEEBB952194`, and
+fails closed on download, hash, import, fingerprint, or bounded history-timeout
+failure without consulting the operator's ambient keyring. GnuPG reports a
+cryptographically valid signature from this freshly imported key with unknown
+ownertrust (`U`); the gate accepts that state only for the exact pinned
+web-flow fingerprint and the separately reviewed commit
+`a25cec76589f7fded297c37b5e0ff407eed31fc0` in `model-hub`. Because GitHub's
+key is service-global, later web-flow commits fail closed until their full
+object IDs are reviewed and onboarded. Git is also forced to use the same
+absolute GPG executable that imported the pinned key, overriding repository or
+ambient verifier configuration. [GitHub documents](https://docs.github.com/en/authentication/managing-commit-signature-verification/about-commit-signature-verification)
+this as the local verification key for web-interface commits. Release tags use
+a separate Duan-only signer allowlist, so GitHub's
+web-flow key cannot authorize a release tag. The Authenticode subject and
+thumbprint allowlists remain intentionally empty until
+the release signing certificate exists, and an empty allowlist fails closed.
+An operator-supplied file cannot add its own signer.
 
 Freshness is evaluated against the executing machine's clock. The authoritative
 publication run must therefore execute in protected CI with retained run
