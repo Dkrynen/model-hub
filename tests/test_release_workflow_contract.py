@@ -28,13 +28,24 @@ def test_release_workflow_requires_exact_source_version_and_protected_controls()
     assert '$tag = "${{' not in text
     assert 'git rev-parse --verify "refs/tags/$tag^{commit}"' in text
     assert "$tagCommit -ne $env:GITHUB_SHA" in text
+    assert 'git cat-file -t "refs/tags/$tag"' in text
+    assert '"/repos/$env:GITHUB_REPOSITORY/git/tags/$tagObject"' in text
+    assert "$tagRecord.verification.verified -ne $true" in text
+    assert "$tagRecord.tag -ne $tag" in text
+    assert "persist-credentials: false" in text
     assert '$env:GITHUB_REF -ne "refs/tags/$tag"' in text
+    assert "group: release-${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}" in text
+    assert '"/repos/$env:GITHUB_REPOSITORY/git/ref/tags/$tag"' in text
+    assert "$tagRefRecord.object.sha -ne $tagObject" in text
     assert "production-release" in text
     assert "INNO_SETUP_LICENSE_CONFIRMED" in text
     assert "SIGNING_CERTIFICATE_PFX_BASE64" in text
     assert "SIGNING_CERTIFICATE_PASSWORD" in text
     assert "SIGNING_TIMESTAMP_URL" in text
     assert "-replace '#define MyAppVersion" not in text
+    assert text.index("Resolve and verify the immutable release version") < text.index(
+        "Require protected release controls"
+    )
 
 
 def test_release_workflow_signs_payload_then_installer_and_verifies_both():

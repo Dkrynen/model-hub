@@ -91,11 +91,48 @@ def test_public_readiness_gate_builds_default_lanes(monkeypatch):
     assert report["ok"] is True
     assert set(report["lanes"]) == {"source", "guards", "installed", "live"}
     assert any(name == "python_tests_non_live" for _, name, _, _ in calls)
+    assert any(name == "web_tests" for _, name, _, _ in calls)
     assert any(name == "web_typecheck" for _, name, _, _ in calls)
+    assert any(name == "web_bundle" for _, name, _, _ in calls)
     assert any(name == "release_readiness" for _, name, _, _ in calls)
     assert any(name == "runtime_smoke" for _, name, _, _ in calls)
     assert any(name == "import_preflight_smoke" for _, name, _, _ in calls)
     assert not any(name == "live_import_stress" for _, name, _, _ in calls)
+
+
+def test_public_readiness_gate_skips_build_and_bundle_together(monkeypatch):
+    gate = _load_gate()
+    names = []
+
+    def fake_run_command(name, command, cwd, timeout, lane):
+        names.append(name)
+        return {
+            "lane": lane,
+            "name": name,
+            "ok": True,
+            "returncode": 0,
+            "cwd": str(cwd),
+            "command": command,
+            "stdout_tail": "",
+            "stderr_tail": "",
+        }
+
+    monkeypatch.setattr(gate, "run_command", fake_run_command)
+    monkeypatch.setattr(gate, "check_lac_pro_remote", lambda args: {
+        "lane": "guards",
+        "name": "lac_pro_remote_guard",
+        "ok": True,
+        "stdout_tail": "",
+        "stderr_tail": "",
+    })
+
+    report = gate.build_report(_args(skip_web_build=True))
+
+    assert report["ok"] is True
+    assert "web_tests" in names
+    assert "web_typecheck" in names
+    assert "web_build" not in names
+    assert "web_bundle" not in names
 
 
 def test_public_readiness_gate_includes_live_import_when_requested(monkeypatch):

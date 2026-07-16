@@ -66,6 +66,7 @@ _WORKER_VERSION_ID = re.compile(
     r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 )
 _B64URL = re.compile(r"[A-Za-z0-9_-]+")
+_CAPABILITY_ID = re.compile(r"[a-z][a-z0-9_]{0,63}")
 _RFC3339_UTC = re.compile(
     r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,7})?Z"
 )
@@ -215,6 +216,11 @@ def _run(args: list[str], *, cwd: Path | None = None) -> subprocess.CompletedPro
 
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
     return _run(["git", "-c", f"safe.directory={repo}", "-C", str(repo), *args])
+
+
+def _quiet_git_success(result: subprocess.CompletedProcess[str]) -> bool:
+    """Require a successful Git command with no ignored diagnostics."""
+    return result.returncode == 0 and not result.stderr.strip()
 
 
 def _nonplaceholder(value: object) -> bool:
@@ -543,6 +549,9 @@ def check_cloud_product_readiness(lac_cloud_root: Path) -> dict[str, Any]:
             "hosted-product readiness gate is missing",
             lane=lane,
         )
+    detail = "hosted-agent product capabilities remain incomplete or unverified"
+    diagnostic_validated = False
+    diagnostic_missing: list[str] = []
     try:
         result = _run(
             ["node", str(script), "--require-hosted-agent-local-complete"],
@@ -551,19 +560,49 @@ def check_cloud_product_readiness(lac_cloud_root: Path) -> dict[str, Any]:
         if len(result.stdout.encode("utf-8")) > 4_096:
             raise ValueError("readiness report is oversized")
         report = json.loads(result.stdout, object_pairs_hook=_unique_object)
-        ready = bool(
-            result.returncode == 0
-            and isinstance(report, dict)
+        exact_schema = bool(
+            isinstance(report, dict)
             and set(report) == {
                 "schemaVersion", "valid", "localEngineeringReady", "status",
                 "missingCapabilities",
             }
+        )
+        missing = report.get("missingCapabilities") if exact_schema else None
+        explainable_incomplete = bool(
+            result.returncode == 1
+            and exact_schema
+            and type(report.get("schemaVersion")) is int
+            and report.get("schemaVersion") == 1
+            and type(report.get("valid")) is bool
+            and report.get("localEngineeringReady") is False
+            and report.get("status") == (
+                "platform_foundation_complete" if report.get("valid") else "invalid"
+            )
+            and isinstance(missing, list)
+            and 0 < len(missing) <= 64
+            and all(isinstance(item, str) and _CAPABILITY_ID.fullmatch(item) for item in missing)
+            and len(missing) == len(set(missing))
+        )
+        if explainable_incomplete:
+            prefix = (
+                "missing hosted-agent capabilities"
+                if report["valid"] else "missing or unverified hosted-agent capabilities"
+            )
+            detail = f"{prefix}: {', '.join(missing)}"
+            diagnostic_validated = True
+            diagnostic_missing = list(missing)
+        ready = bool(
+            result.returncode == 0
+            and exact_schema
+            and type(report.get("schemaVersion")) is int
             and report.get("schemaVersion") == 1
             and report.get("valid") is True
             and report.get("localEngineeringReady") is True
             and report.get("status") == "hosted_agent_local_complete"
             and report.get("missingCapabilities") == []
         )
+        if ready:
+            diagnostic_validated = True
     except (
         OSError,
         UnicodeError,
@@ -576,8 +615,12 @@ def check_cloud_product_readiness(lac_cloud_root: Path) -> dict[str, Any]:
         "cloud_product_local_complete",
         ready,
         "all required hosted-agent capabilities are locally complete"
-        if ready else "hosted-agent product capabilities remain incomplete or unverified",
+        if ready else detail,
         lane=lane,
+        data={
+            "diagnostic_validated": diagnostic_validated,
+            "missing_capabilities": diagnostic_missing,
+        },
     )
 
 
@@ -609,19 +652,20 @@ def check_repository(
         return rows
 
     status = _git(path, "status", "--porcelain=v1", "--untracked-files=all")
-    dirty_count = len([line for line in status.stdout.splitlines() if line]) if status.returncode == 0 else -1
-    clean = status.returncode == 0 and dirty_count == 0
+    status_ok = _quiet_git_success(status)
+    dirty_count = len([line for line in status.stdout.splitlines() if line]) if status_ok else -1
+    clean = status_ok and dirty_count == 0
 
     base_ok = True
     revision = "HEAD"
     if base_commit:
         base_exists = _git(path, "cat-file", "-e", f"{base_commit}^{{commit}}")
         ancestor = _git(path, "merge-base", "--is-ancestor", base_commit, "HEAD")
-        base_ok = base_exists.returncode == 0 and ancestor.returncode == 0
+        base_ok = _quiet_git_success(base_exists) and _quiet_git_success(ancestor)
         revision = f"{base_commit}..HEAD"
     signatures = _git(path, "log", revision, "--format=%G?%x00%GF") if base_ok else None
     signature_rows: list[tuple[str, str]] = []
-    if signatures is not None and signatures.returncode == 0:
+    if signatures is not None and _quiet_git_success(signatures):
         for line in signatures.stdout.splitlines():
             state, _, fingerprint = line.partition("\0")
             if state:
@@ -645,19 +689,20 @@ def check_repository(
         for line in remote_lines
         if len(parts := line.split()) == 3
     }
-    remote_count = len({name for name, _, _ in remote_records}) if remotes.returncode == 0 else -1
+    remotes_ok = _quiet_git_success(remotes)
+    remote_count = len({name for name, _, _ in remote_records}) if remotes_ok else -1
     if require_zero_remotes:
-        remote_ok = remote_count == 0
+        remote_ok = remotes_ok and remote_count == 0
         remote_detail = "repository has zero remotes" if remote_ok else "local-only repository has a remote"
     elif required_remote:
         expected = {
             ("origin", required_remote, "fetch"),
             ("origin", required_remote, "push"),
         }
-        remote_ok = remote_records == expected
+        remote_ok = remotes_ok and remote_records == expected
         remote_detail = "exact approved remote is configured" if remote_ok else "remote set differs from the approved contract"
     else:
-        remote_ok = remote_count > 0
+        remote_ok = remotes_ok and remote_count > 0
         remote_detail = "repository has a remote" if remote_ok else "repository remote is missing"
 
     rows = [
@@ -665,14 +710,20 @@ def check_repository(
         _result(
             f"{name}_clean",
             clean,
-            "worktree is clean" if clean else "worktree has changes",
+            "worktree is clean" if clean else (
+                "worktree status could not be verified" if not status_ok else "worktree has changes"
+            ),
             lane=lane,
             data={"dirty_count": dirty_count},
         ),
         _result(
             f"{name}_signed_commits",
             signed_ok,
-            "release-range commits are signed" if signed_ok else "release-range contains unsigned commits",
+            "release-range commits are signed" if signed_ok else (
+                "release-range signature status could not be verified"
+                if signatures is None or not _quiet_git_success(signatures)
+                else "release-range contains unsigned commits"
+            ),
             lane=lane,
             data={
                 "base_commit_verified": base_ok,
@@ -692,6 +743,7 @@ def check_repository(
     if release_tag is not None:
         tag_ref = f"refs/tags/{release_tag}"
         tag_type = _git(path, "cat-file", "-t", tag_ref)
+        tag_object = _git(path, "cat-file", "tag", tag_ref)
         tag_target = _git(path, "rev-parse", f"{tag_ref}^{{commit}}")
         verification = _git(path, "verify-tag", "--raw", tag_ref)
         verification_output = f"{verification.stdout}\n{verification.stderr}"
@@ -713,11 +765,19 @@ def check_repository(
             for signer in [*gpg_signers, *ssh_signers]
             if (normalised := _normalise_signer(signer))
         }
+        tag_header = tag_object.stdout.split("\n\n", 1)[0] if _quiet_git_success(tag_object) else ""
+        embedded_tag_names = [
+            line.removeprefix("tag ")
+            for line in tag_header.splitlines()
+            if line.startswith("tag ")
+        ]
+        embedded_name_matches = embedded_tag_names == [release_tag]
         tag_ok = bool(
             re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", release_tag)
             and _GIT_COMMIT.fullmatch(str(expected_tag_target or ""))
             and tag_type.returncode == 0
             and tag_type.stdout.strip() == "tag"
+            and embedded_name_matches
             and tag_target.returncode == 0
             and tag_target.stdout.strip() == expected_tag_target
             and verification.returncode == 0
@@ -728,11 +788,13 @@ def check_repository(
         rows.append(_result(
             f"{name}_signed_release_tag",
             tag_ok,
-            "annotated release tag targets HEAD and has an approved signature" if tag_ok
-            else "release tag is missing, lightweight, mistargeted, unsigned, or untrusted",
+            "annotated release tag has the exact name, targets HEAD, and has an approved signature"
+            if tag_ok
+            else "release tag is missing, lightweight, misnamed, mistargeted, unsigned, or untrusted",
             lane=lane,
             data={
                 "annotated": tag_type.returncode == 0 and tag_type.stdout.strip() == "tag",
+                "embedded_name_matches": embedded_name_matches,
                 "targets_expected_commit": (
                     tag_target.returncode == 0
                     and tag_target.stdout.strip() == expected_tag_target

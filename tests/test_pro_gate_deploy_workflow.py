@@ -8,10 +8,12 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "pro-gate-deploy.yml"
+TRUST_POLICY = ROOT / "docs" / "security" / "SUPPLY-CHAIN-TRUST.md"
 
 
 def test_pro_gate_deploy_is_manual_protected_and_exact_commit_only():
     text = WORKFLOW.read_text(encoding="utf-8")
+    trust_root = "f6ccf527b493e97ab5138afa4306241677037492"  # pragma: allowlist secret
     yaml.safe_load(text)
 
     assert "workflow_dispatch:" in text
@@ -21,10 +23,24 @@ def test_pro_gate_deploy_is_manual_protected_and_exact_commit_only():
     assert "persist-credentials: false" in text
     assert ".commit.verification.verified" in text
     assert ".verification.verified == true" in text
+    assert '.tag == $tag' in text
+    assert 'git/ref/tags/$APPROVED_TAG' in text
+    assert '.object.type == "tag"' in text
+    assert '.object.sha == $object' in text
     assert 'test "$actual" = "$APPROVED_COMMIT"' in text
     assert 'git cat-file -t "refs/tags/$APPROVED_TAG"' in text
-    assert "git rev-list --count" in text
     assert "gh api --paginate --slurp" in text
+    assert f'TRUST_ROOT_COMMIT="{trust_root}"' in text
+    assert trust_root in TRUST_POLICY.read_text(encoding="utf-8")
+    assert 'EXPECTED_WORKFLOW_REF="$GITHUB_REPOSITORY/.github/workflows/pro-gate-deploy.yml@refs/heads/master"' in text
+    assert 'test "$GITHUB_WORKFLOW_REF" = "$EXPECTED_WORKFLOW_REF"' in text
+    assert 'test "$(git cat-file -t "$TRUST_ROOT_COMMIT")" = "commit"' in text
+    assert 'git merge-base --is-ancestor "$TRUST_ROOT_COMMIT" "$actual"' in text
+    assert 'git rev-list "$TRUST_ROOT_COMMIT..$actual"' in text
+    assert 'compare/$TRUST_ROOT_COMMIT...$actual?per_page=100' in text
+    assert 'commits/$TRUST_ROOT_COMMIT' in text
+    assert 'cmp -s "$RUNNER_TEMP/expected-commits.txt" "$RUNNER_TEMP/api-commits.txt"' in text
+    assert 'git rev-list --count "$actual"' not in text
 
 
 def test_pro_gate_deploy_requires_concrete_contract_secrets_and_staging_promotion():
