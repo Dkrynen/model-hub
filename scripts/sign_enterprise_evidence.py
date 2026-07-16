@@ -27,6 +27,8 @@ import enterprise_launch_gate as gate  # noqa: E402
 
 
 PRIVATE_KEY_MAX_BYTES = 16 * 1024
+_DARWIN_F_GETPATH = 50
+_DARWIN_MAXPATHLEN = 1024
 _TOP_LEVEL_FIELDS = {"schema_version", "release_scope", "release_version", "gates"}
 _RELEASE_BINDING_FIELDS = (
     "model_hub_commit",
@@ -270,6 +272,31 @@ def _write_exclusive(path: Path, document: dict[str, Any]) -> None:
             os.close(descriptor)
 
 
+def _darwin_open_handle_path(descriptor: int) -> Path:
+    import fcntl
+
+    try:
+        raw_path = fcntl.fcntl(
+            descriptor,
+            _DARWIN_F_GETPATH,
+            b"\0" * _DARWIN_MAXPATHLEN,
+        )
+    except (OSError, ValueError) as error:
+        raise ValueError("signed evidence output final path could not be verified") from error
+    if not isinstance(raw_path, bytes) or len(raw_path) != _DARWIN_MAXPATHLEN:
+        raise ValueError("signed evidence output final path could not be verified")
+    terminator = raw_path.find(b"\0")
+    if terminator <= 0:
+        raise ValueError("signed evidence output final path could not be verified")
+    path = Path(os.fsdecode(raw_path[:terminator]))
+    if not path.is_absolute():
+        raise ValueError("signed evidence output final path could not be verified")
+    try:
+        return path.resolve(strict=True)
+    except (OSError, RuntimeError) as error:
+        raise ValueError("signed evidence output final path could not be verified") from error
+
+
 def _open_handle_path(descriptor: int) -> Path:
     if os.name == "nt":
         import ctypes
@@ -289,6 +316,8 @@ def _open_handle_path(descriptor: int) -> Path:
         elif value.startswith("\\\\?\\"):
             value = value[4:]
         return Path(value).resolve(strict=True)
+    if sys.platform == "darwin":
+        return _darwin_open_handle_path(descriptor)
     for link in (Path(f"/proc/self/fd/{descriptor}"), Path(f"/dev/fd/{descriptor}")):
         try:
             if link.exists():

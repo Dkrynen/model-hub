@@ -4,7 +4,10 @@ import base64
 import hashlib
 import importlib.util
 import json
+import os
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from cryptography.hazmat.primitives import serialization
@@ -315,3 +318,32 @@ def test_write_exclusive_rejects_redirected_open_handle(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match="outside the repository"):
         signer._write_exclusive(output_path, {"signed": True})
     assert not output_path.exists()
+
+
+def test_darwin_open_handle_path_uses_f_getpath(tmp_path, monkeypatch):
+    signer = _load(SIGNER_SCRIPT, "sign_enterprise_evidence_darwin_handle")
+    target = tmp_path / "signed.json"
+    target.write_text("signed", encoding="utf-8")
+    calls = []
+
+    def fake_fcntl(descriptor, command, buffer):
+        calls.append((descriptor, command, len(buffer)))
+        path = os.fsencode(target)
+        return path + b"\0" + (b"\0" * (len(buffer) - len(path) - 1))
+
+    monkeypatch.setitem(sys.modules, "fcntl", SimpleNamespace(fcntl=fake_fcntl))
+
+    assert signer._darwin_open_handle_path(17) == target.resolve(strict=True)
+    assert calls == [(17, 50, 1024)]
+
+
+def test_darwin_open_handle_path_fails_closed_on_unterminated_result(monkeypatch):
+    signer = _load(SIGNER_SCRIPT, "sign_enterprise_evidence_darwin_unterminated")
+    monkeypatch.setitem(
+        sys.modules,
+        "fcntl",
+        SimpleNamespace(fcntl=lambda _descriptor, _command, buffer: b"x" * len(buffer)),
+    )
+
+    with pytest.raises(ValueError, match="final path could not be verified"):
+        signer._darwin_open_handle_path(17)
