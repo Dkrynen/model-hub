@@ -473,8 +473,8 @@ def test_cloud_product_readiness_requires_exact_strict_cli_success(tmp_path, mon
     script.write_text("// fixture\n", encoding="utf-8")
     calls = []
 
-    def fake_run(args, *, cwd=None):
-        calls.append((args, cwd))
+    def fake_run(args, *, cwd=None, timeout_seconds=None):
+        calls.append((args, cwd, timeout_seconds))
         report = {
             "schemaVersion": 1,
             "valid": True,
@@ -492,7 +492,7 @@ def test_cloud_product_readiness_requires_exact_strict_cli_success(tmp_path, mon
         "node",
         str(script),
         "--require-hosted-agent-local-complete",
-    ], cloud)]
+    ], cloud, gate.PRODUCT_READINESS_TIMEOUT_SECONDS)]
 
 
 def test_cloud_product_readiness_fails_closed_on_incomplete_or_ambiguous_output(
@@ -539,7 +539,9 @@ def test_cloud_product_readiness_fails_closed_on_incomplete_or_ambiguous_output(
     details = []
     data = []
     for result in reports:
-        monkeypatch.setattr(gate, "_run", lambda args, cwd=None, result=result: result)
+        monkeypatch.setattr(
+            gate, "_run", lambda args, cwd=None, timeout_seconds=None, result=result: result,
+        )
         row = gate.check_cloud_product_readiness(cloud)
         assert row["ok"] is False
         details.append(row["detail"])

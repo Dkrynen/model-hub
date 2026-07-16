@@ -119,6 +119,7 @@ _SBOM_FIELDS = {"filename", "bytes", "sha256"}
 PROVENANCE_MAX_AGE_DAYS = 14
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 30
 SIGNATURE_HISTORY_TIMEOUT_SECONDS = 120
+PRODUCT_READINESS_TIMEOUT_SECONDS = 120
 GITHUB_WEB_FLOW_KEY_URL = "https://github.com/web-flow.gpg"
 GITHUB_WEB_FLOW_KEY_SHA256 = (
     "6e8af687f60cf3f403151c8fb1b26e95e6f9e424ca60cc8f3787bd4466a3ef84"  # pragma: allowlist secret -- public key checksum
@@ -722,6 +723,7 @@ def check_cloud_product_readiness(lac_cloud_root: Path) -> dict[str, Any]:
         result = _run(
             ["node", str(script), "--require-hosted-agent-local-complete"],
             cwd=lac_cloud_root,
+            timeout_seconds=PRODUCT_READINESS_TIMEOUT_SECONDS,
         )
         if len(result.stdout.encode("utf-8")) > 4_096:
             raise ValueError("readiness report is oversized")
